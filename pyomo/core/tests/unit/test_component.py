@@ -10,7 +10,7 @@
 #
 # Unit Tests for components
 #
-
+from six import StringIO
 import pyutilib.th as unittest
 
 from pyomo.common import DeveloperError
@@ -83,6 +83,17 @@ class TestComponent(unittest.TestCase):
         self.assertEqual(
             m.b[2].c[1,3].getname(fully_qualified=True, name_buffer=cache),
             "b[2].c[1,3]")
+
+    def test_component_data_pprint(self):
+        m = ConcreteModel()
+        m.a = Set(initialize=[1, 2, 3], ordered=True)
+        m.x = Var(m.a)
+        stream = StringIO()
+        m.x[2].pprint(ostream=stream)
+        correct_s = '{Member of x} : Size=3, Index=a\n    ' \
+                    'Key : Lower : Value : Upper : Fixed : Stale : Domain\n      ' \
+                    '2 :  None :  None :  None : False :  True :  Reals\n'
+        self.assertEqual(correct_s, stream.getvalue())
 
 
 class TestComponentUID(unittest.TestCase):
@@ -525,10 +536,16 @@ class TestComponentUID(unittest.TestCase):
 class TestEnviron(unittest.TestCase):
 
     def test_components(self):
-        self.assertTrue(set(x[0] for x in pyomo.core.base._pyomo.model_components()) >= set(['Set', 'Param', 'Var', 'Objective', 'Constraint']))
+        self.assertGreaterEqual(
+            set(x[0] for x in pyomo.core.base._pyomo.model_components()),
+            set(['Set', 'Param', 'Var', 'Objective', 'Constraint'])
+        )
 
     def test_sets(self):
-        self.assertTrue(set(x[0] for x in pyomo.core.base._pyomo.predefined_sets()) >= set(['Reals', 'Integers', 'Boolean']))
+        self.assertGreaterEqual(
+            set(x[0] for x in pyomo.core.base._pyomo.predefined_sets()),
+            set(['Reals', 'Integers', 'Boolean'])
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,11 +17,12 @@ Contributed packages distributed with Pyomo:
 
    preprocessing.rst
    gdpopt.rst
-   gdpbb.rst
    multistart.rst
    parmest/index.rst
    mcpp.rst
    mindtpy.rst
+   satsolver.rst
+   sensitivity_toolbox.rst
 
 Contributed packages distributed independently of Pyomo, but accessible
 through ``pyomo.contrib``:

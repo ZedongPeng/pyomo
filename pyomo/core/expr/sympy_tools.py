@@ -12,36 +12,26 @@ from six import StringIO, iterkeys
 import pyutilib.misc
 from pyomo.core.expr import current
 from pyomo.common import DeveloperError
+from pyomo.common.dependencies import attempt_import
 from pyomo.core.expr import current as EXPR, native_types
 from pyomo.core.expr.numvalue import value
 from pyomo.core.kernel.component_map import ComponentMap
 from pyomo.common.errors import NondifferentiableError
 
-sympy_available = True
-try:
-    import sympy
+#
+# Sympy takes a significant time to load; defer importing it unless
+# someone actually needs the interface.
+#
 
-    def _prod(*x):
-        ans = x[0]
-        for i in x[1:]:
-            ans *= i
-        return ans
+_operatorMap = {}
+_pyomo_operator_map = {}
+_functionMap = {}
 
-    def _sum(*x):
-        return sum(x_ for x_ in x)
+def _configure_sympy(sympy, available):
+    if not available:
+        return
 
-    def _nondifferentiable(*x):
-        if type(x[1]) is tuple:
-            # sympy >= 1.3 returns tuples (var, order)
-            wrt = x[1][0]
-        else:
-            # early versions of sympy returned the bare var
-            wrt = x[1]
-        raise NondifferentiableError(
-            "The sub-expression '%s' is not differentiable with respect to %s"
-            % (x[0], wrt) )
-
-    _operatorMap = {
+    _operatorMap.update({
         sympy.Add: _sum,
         sympy.Mul: _prod,
         sympy.Pow: lambda x, y: x**y,
@@ -62,18 +52,19 @@ try:
         sympy.ceiling: lambda x: current.ceil(x),
         sympy.floor: lambda x: current.floor(x),
         sympy.sqrt: lambda x: current.sqrt(x),
+        sympy.Abs: lambda x: abs(x),
         sympy.Derivative: _nondifferentiable,
         sympy.Tuple: lambda *x: x,
-    }
+    })
 
-    _pyomo_operator_map = {
+    _pyomo_operator_map.update({
         EXPR.SumExpression: sympy.Add,
         EXPR.ProductExpression: sympy.Mul,
         EXPR.NPV_ProductExpression: sympy.Mul,
         EXPR.MonomialTermExpression: sympy.Mul,
-    }
+    })
 
-    _functionMap = {
+    _functionMap.update({
         'exp': sympy.exp,
         'log': sympy.log,
         'log10': lambda x: sympy.log(x)/sympy.log(10),
@@ -92,9 +83,30 @@ try:
         'ceil': sympy.ceiling,
         'floor': sympy.floor,
         'sqrt': sympy.sqrt,
-    }
-except ImportError:
-    sympy_available = False
+    })
+
+sympy, sympy_available = attempt_import('sympy', callback=_configure_sympy)
+
+
+def _prod(*x):
+    ans = x[0]
+    for i in x[1:]:
+        ans *= i
+    return ans
+
+def _sum(*x):
+    return sum(x_ for x_ in x)
+
+def _nondifferentiable(*x):
+    if type(x[1]) is tuple:
+        # sympy >= 1.3 returns tuples (var, order)
+        wrt = x[1][0]
+    else:
+        # early versions of sympy returned the bare var
+        wrt = x[1]
+    raise NondifferentiableError(
+        "The sub-expression '%s' is not differentiable with respect to %s"
+        % (x[0], wrt) )
 
 class PyomoSympyBimap(object):
     def __init__(self):
@@ -108,7 +120,10 @@ class PyomoSympyBimap(object):
     def getSympySymbol(self, pyomo_object):
         if pyomo_object in self.pyomo2sympy:
             return self.pyomo2sympy[pyomo_object]
-        sympy_obj = sympy.Symbol("x%d" % self.i)
+        # Pyomo currently ONLY supports Real variables (not complex
+        # variables).  If that ever changes, then we will need to
+        # revisit hard-coding the symbol type here
+        sympy_obj = sympy.Symbol("x%d" % self.i, real=True)
         self.i += 1
         self.pyomo2sympy[pyomo_object] = sympy_obj
         self.sympy2pyomo[sympy_obj] = pyomo_object
@@ -124,8 +139,12 @@ class PyomoSympyBimap(object):
 class Pyomo2SympyVisitor(EXPR.StreamBasedExpressionVisitor):
 
     def __init__(self, object_map):
+        sympy.Add  # this ensures _configure_sympy gets run
         super(Pyomo2SympyVisitor, self).__init__()
         self.object_map = object_map
+
+    def initializeWalker(self, expr):
+        return self.beforeChild(None, expr, None)
 
     def exitNode(self, node, values):
         if node.__class__ is EXPR.UnaryFunctionExpression:
@@ -136,7 +155,7 @@ class Pyomo2SympyVisitor(EXPR.StreamBasedExpressionVisitor):
         else:
             return _op(*tuple(values))
 
-    def beforeChild(self, node, child):
+    def beforeChild(self, node, child, child_idx):
         #
         # Don't replace native or sympy types
         #
@@ -160,8 +179,12 @@ class Pyomo2SympyVisitor(EXPR.StreamBasedExpressionVisitor):
 class Sympy2PyomoVisitor(EXPR.StreamBasedExpressionVisitor):
 
     def __init__(self, object_map):
+        sympy.Add  # this ensures _configure_sympy gets run
         super(Sympy2PyomoVisitor, self).__init__()
         self.object_map = object_map
+
+    def initializeWalker(self, expr):
+        return self.beforeChild(None, expr, None)
 
     def enterNode(self, node):
         return (node._args, [])
@@ -176,7 +199,7 @@ class Sympy2PyomoVisitor(EXPR.StreamBasedExpressionVisitor):
                 "map" % type(_sympyOp) )
         return _op(*tuple(values))
 
-    def beforeChild(self, node, child):
+    def beforeChild(self, node, child, child_idx):
         if not child._args:
             item = self.object_map.getPyomoSymbol(child, None)
             if item is None:
@@ -191,16 +214,9 @@ def sympyify_expression(expr):
     #
     object_map = PyomoSympyBimap()
     visitor = Pyomo2SympyVisitor(object_map)
-    is_expr, ans = visitor.beforeChild(None, expr)
-    if not is_expr:
-        return object_map, ans
-
     return object_map, visitor.walk_expression(expr)
 
 
 def sympy2pyomo_expression(expr, object_map):
     visitor = Sympy2PyomoVisitor(object_map)
-    is_expr, ans = visitor.beforeChild(None, expr)
-    if not is_expr:
-        return ans
     return visitor.walk_expression(expr)

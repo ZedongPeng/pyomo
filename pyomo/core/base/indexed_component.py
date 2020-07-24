@@ -13,31 +13,80 @@ __all__ = ['IndexedComponent', 'ActiveIndexedComponent']
 import pyutilib.misc
 
 from pyomo.core.expr.expr_errors import TemplateExpressionError
-from pyomo.core.base.indexed_component_slice import _IndexedComponent_slice
+from pyomo.core.expr.numvalue import native_types
+from pyomo.core.base.indexed_component_slice import IndexedComponent_slice
 from pyomo.core.base.component import Component, ActiveComponent
 from pyomo.core.base.config import PyomoOptions
+from pyomo.core.base.global_set import UnindexedComponent_set
 from pyomo.common import DeveloperError
 
-from six import PY3, itervalues, iteritems
+from six import PY3, itervalues, iteritems, string_types
 
-UnindexedComponent_set = set([None])
+if PY3:
+    from collections.abc import Sequence as collections_Sequence
+else:
+    from collections import Sequence as collections_Sequence
 
-def normalize_index(index):
+sequence_types = {tuple, list}
+def normalize_index(x):
+    """Normalize a component index.
+
+    This flattens nested sequences into a single tuple.  There is a
+    "global" flag (normalize_index.flatten) that will turn off index
+    flattening across Pyomo.
+
+    Scalar values will be returned unchanged.  Tuples with a single
+    value will be unpacked and returned as a single value.
+
+    Returns
+    -------
+    scalar or tuple
+
     """
-    Flatten a component index.  If it has length 1, then
-    return just the element.  If it has length > 1, then
-    return a tuple.
-    """
-    idx = pyutilib.misc.flatten(index)
-    if type(idx) is list:
-        if len(idx) == 1:
-            idx = idx[0]
+    if x.__class__ in native_types:
+        return x
+    elif x.__class__ in sequence_types:
+        # Note that casting a tuple to a tuple is cheap (no copy, no
+        # new object)
+        x = tuple(x)
+    else:
+        x = (x,)
+
+    x_len = len(x)
+    i = 0
+    while i < x_len:
+        _xi_class = x[i].__class__
+        if _xi_class in native_types:
+            i += 1
+        elif _xi_class in sequence_types:
+            x_len += len(x[i]) - 1
+            # Note that casting a tuple to a tuple is cheap (no copy, no
+            # new object)
+            x = x[:i] + tuple(x[i]) + x[i + 1:]
+        elif issubclass(_xi_class, collections_Sequence):
+            if issubclass(_xi_class, string_types):
+                # This is very difficult to get to: it would require a
+                # user creating a custom derived string type
+                native_types.add(_xi_class)
+                i += 1
+            else:
+                sequence_types.add(_xi_class)
+                x_len += len(x[i]) - 1
+                x = x[:i] + tuple(x[i]) + x[i + 1:]
         else:
-            idx = tuple(idx)
-    return idx
+            i += 1
+
+    if x_len == 1:
+        return x[0]
+    return x
+
+# Pyomo will normalize indices by default
 normalize_index.flatten = True
 
+
 class _NotFound(object):
+    pass
+class _NotSpecified(object):
     pass
 
 #
@@ -127,7 +176,7 @@ class IndexedComponent(Component):
     _DEFAULT_INDEX_CHECKING_ENABLED = True
 
     def __init__(self, *args, **kwds):
-        from pyomo.core.base.sets import process_setarg
+        from pyomo.core.base.set import process_setarg
         #
         kwds.pop('noruleinit', None)
         Component.__init__(self, **kwds)
@@ -209,7 +258,7 @@ class IndexedComponent(Component):
         """Return the dimension of the index"""
         if not self.is_indexed():
             return 0
-        return getattr(self._index, 'dimen', 0)
+        return self._index.dimen
 
     def __len__(self):
         """
@@ -225,7 +274,7 @@ class IndexedComponent(Component):
     def __iter__(self):
         """Iterate over the keys in the dictionary"""
 
-        if not getattr(self._index, 'concrete', True):
+        if hasattr(self._index, 'isfinite') and not self._index.isfinite():
             #
             # If the index set is virtual (e.g., Any) then return the
             # data iterator.  Note that since we cannot check the length
@@ -260,7 +309,7 @@ You can silence this warning by one of three ways:
        where it is empty.
 """ % (self.name,) )
 
-            if not hasattr(self._index, 'ordered') or not self._index.ordered:
+            if not hasattr(self._index, 'isordered') or not self._index.isordered():
                 #
                 # If the index set is not ordered, then return the
                 # data iterator.  This is in an arbitrary order, which is
@@ -318,8 +367,15 @@ You can silence this warning by one of three ways:
         try:
             obj = self._data.get(index, _NotFound)
         except TypeError:
-            index = self._processUnhashableIndex(index)
-            if index.__class__ is _IndexedComponent_slice:
+            try:
+                index = self._processUnhashableIndex(index)
+            except TypeError:
+                # This index is really unhashable.  Set a flag so that
+                # we can re-raise the original exception (not this one)
+                index = TypeError
+            if index is TypeError:
+                raise
+            if index.__class__ is IndexedComponent_slice:
                 return index
             # The index could have contained constant but nonhashable
             # objects (e.g., scalar immutable Params).
@@ -345,7 +401,7 @@ You can silence this warning by one of three ways:
                 # _processUnhashableIndex could have found a slice, or
                 # _validate could have found an Ellipsis and returned a
                 # slicer
-                if index.__class__ is _IndexedComponent_slice:
+                if index.__class__ is IndexedComponent_slice:
                     return index
                 obj = self._data.get(index, _NotFound)
             #
@@ -382,7 +438,7 @@ You can silence this warning by one of three ways:
             # If we didn't find the index in the data, then we need to
             # validate it against the underlying set (as long as
             # _processUnhashableIndex didn't return a slicer)
-            if index.__class__ is not _IndexedComponent_slice:
+            if index.__class__ is not IndexedComponent_slice:
                 index = self._validate_index(index)
         else:
             return self._setitem_impl(index, obj, val)
@@ -391,10 +447,10 @@ You can silence this warning by one of three ways:
         # dictionary and set the value
         #
         # Note that we need to RECHECK the class against
-        # _IndexedComponent_slice, as _validate_index could have found
+        # IndexedComponent_slice, as _validate_index could have found
         # an Ellipsis (which is hashable) and returned a slicer
         #
-        if index.__class__ is _IndexedComponent_slice:
+        if index.__class__ is IndexedComponent_slice:
             # support "m.x[:,1] = 5" through a simple recursive call.
             #
             # Assert that this slice was just generated
@@ -424,11 +480,11 @@ You can silence this warning by one of three ways:
             index = self._processUnhashableIndex(index)
 
         if obj is _NotFound:
-            if index.__class__ is not _IndexedComponent_slice:
+            if index.__class__ is not IndexedComponent_slice:
                 index = self._validate_index(index)
 
         # this supports "del m.x[:,1]" through a simple recursive call
-        if index.__class__ is _IndexedComponent_slice:
+        if index.__class__ is IndexedComponent_slice:
             # Assert that this slice ws just generated
             assert len(index._call_stack) == 1
             # Make a copy of the slicer items *before* we start
@@ -462,13 +518,14 @@ You can silence this warning by one of three ways:
 
         # This is only called through __{get,set,del}item__, which has
         # already trapped unhashable objects.
-        if idx in self._index:
+        validated_idx = self._index.get(idx, _NotFound)
+        if validated_idx is not _NotFound:
             # If the index is in the underlying index set, then return it
             #  Note: This check is potentially expensive (e.g., when the
             # indexing set is a complex set operation)!
-            return idx
+            return validated_idx
 
-        if idx.__class__ is _IndexedComponent_slice:
+        if idx.__class__ is IndexedComponent_slice:
             return idx
 
         if normalize_index.flatten:
@@ -492,7 +549,7 @@ You can silence this warning by one of three ways:
         #
         if not self.is_indexed():
             raise KeyError(
-                "Cannot treat the scalar component '%s'"
+                "Cannot treat the scalar component '%s' "
                 "as an indexed component" % ( self.name, ))
         #
         # Raise an exception
@@ -522,15 +579,9 @@ You can silence this warning by one of three ways:
         #
         # Setup the slice template (in fixed)
         #
-        if type(idx) is tuple:
-            # We would normally do "flatten()" here, but the current
-            # (10/2016) implementation of flatten() is too aggressive:
-            # it will attempt to expand *any* iterable, including
-            # SimpleParam.
-            idx = pyutilib.misc.flatten_tuple(idx)
-        elif type(idx) is list:
-            idx = pyutilib.misc.flatten_tuple(tuple(idx))
-        else:
+        if normalize_index.flatten:
+            idx = normalize_index(idx)
+        if idx.__class__ is not tuple:
             idx = (idx,)
 
         for i,val in enumerate(idx):
@@ -576,7 +627,7 @@ You can silence this warning by one of three ways:
                     # templatized expression.
                     #
                     from pyomo.core.expr import current as EXPR
-                    return EXPR.GetItemExpression(tuple(idx), self)
+                    return EXPR.GetItemExpression((self,) + tuple(idx))
 
                 except EXPR.NonConstantExpressionError:
                     #
@@ -615,7 +666,38 @@ value() function.""" % ( self.name, i ))
                 fixed[i - len(idx)] = val
 
         if sliced or ellipsis is not None:
-            return _IndexedComponent_slice(self, fixed, sliced, ellipsis)
+            slice_dim = len(idx)
+            if ellipsis is not None:
+                slice_dim -= 1
+            if normalize_index.flatten:
+                set_dim = self.dim()
+            elif self._implicit_subsets is None:
+                # Scalar component.
+                set_dim = 0
+            else:
+                set_dim = len(self._implicit_subsets)
+
+            structurally_valid = False
+            if slice_dim == set_dim or set_dim is None:
+                structurally_valid = True
+            elif ellipsis is not None and slice_dim < set_dim:
+                structurally_valid = True
+            elif set_dim == 0 and idx == (slice(None),):
+                # If dim == 0 and idx is slice(None), the component was
+                # a scalar passed a single slice. Since scalar components
+                # can be accessed with a "1-dimensional" index of None,
+                # this behavior is allowed.
+                #
+                # Note that x[...] is caught above, as slice_dim will be
+                # 0 in that case
+                structurally_valid = True
+
+            if not structurally_valid:
+                raise IndexError(
+                    "Index %s contains an invalid number of entries for "
+                    "component %s. Expected %s, got %s." 
+                    % (idx, self.name, set_dim, slice_dim))
+            return IndexedComponent_slice(self, fixed, sliced, ellipsis)
         elif _found_numeric:
             if len(idx) == 1:
                 return fixed[0]
@@ -655,7 +737,7 @@ value() function.""" % ( self.name, i ))
         obj.set_value(value)
         return obj
 
-    def _setitem_when_not_present(self, index, value):
+    def _setitem_when_not_present(self, index, value=_NotSpecified):
         """Perform the fundamental component item creation and storage.
 
         Components that want to implement a nonstandard storage mechanism
@@ -672,11 +754,12 @@ value() function.""" % ( self.name, i ))
         else:
             obj = self._data[index] = self._ComponentDataClass(component=self)
         try:
-            obj.set_value(value)
-            return obj
+            if value is not _NotSpecified:
+                obj.set_value(value)
         except:
             del self._data[index]
             raise
+        return obj
 
     def set_value(self, value):
         """Set the value of a scalar component."""

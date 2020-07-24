@@ -24,6 +24,7 @@ from pyomo.core.expr.expr_common import \
      _iadd, _isub, _imul, _idiv,
      _ipow, _lt, _le, _eq)
 
+from pyomo.core.pyomoobject import PyomoObject
 from pyomo.core.expr.expr_errors import TemplateExpressionError
 
 logger = logging.getLogger('pyomo.core')
@@ -95,6 +96,8 @@ nonpyomo_leaf_types = set([NonNumericValue])
 native_numeric_types = set([ int, float, bool ])
 native_integer_types = set([ int, bool ])
 native_boolean_types = set([ int, bool, str ])
+native_logical_types = {bool, }
+pyomo_constant_types = set()  # includes NumericConstant
 try:
     native_numeric_types.add(long)
     native_integer_types.add(long)
@@ -108,7 +111,7 @@ except:
 #: like numpy.
 #:
 #: :data:`native_types` = :data:`native_numeric_types <pyomo.core.expr.numvalue.native_numeric_types>` + { str }
-native_types = set([ bool, str, type(None) ])
+native_types = set([ bool, str, type(None), slice ])
 if PY3:
     native_types.add(bytes)
     native_boolean_types.add(bytes)
@@ -187,7 +190,7 @@ def value(obj, exception=True):
     """
     if obj.__class__ in native_types:
         return obj
-    if obj.__class__ is NumericConstant:
+    if obj.__class__ in pyomo_constant_types:
         #
         # I'm commenting this out for now, but I think we should never expect
         # to see a numeric constant with value None.
@@ -482,7 +485,15 @@ def check_if_numeric_type_and_cache(obj):
     NumericConstant object.
 
     """
-    if obj.__class__ is (obj + 0).__class__:
+    obj_class = obj.__class__
+    if obj_class is (obj + 0).__class__:
+        #
+        # Coerce the value to a float, if possible
+        #
+        try:
+            obj = float(obj)
+        except:
+            pass
         #
         # obj may (or may not) be hashable, so we need this try
         # block so that things proceed normally for non-hashable
@@ -504,9 +515,9 @@ def check_if_numeric_type_and_cache(obj):
             # numeric type: add it to the native numeric types
             # so that future lookups will be faster.
             #
-            native_numeric_types.add(obj.__class__)
-            native_types.add(obj.__class__)
-            nonpyomo_leaf_types.add(obj.__class__)
+            native_numeric_types.add(obj_class)
+            native_types.add(obj_class)
+            nonpyomo_leaf_types.add(obj_class)
             #
             # Generate a warning, since Pyomo's management of third-party
             # numeric types is more robust when registering explicitly.
@@ -524,7 +535,7 @@ numeric types using the following functions:
         return retval
 
 
-class NumericValue(object):
+class NumericValue(PyomoObject):
     """
     This is the base class for numeric values used in Pyomo.
     """
@@ -606,6 +617,10 @@ class NumericValue(object):
             "DEPRECATED: The cname() method has been renamed to getname()." )
         return self.getname(*args, **kwds)
 
+    def is_numeric_type(self):
+        """Return True if this class is a Pyomo numeric object"""
+        return True
+
     def is_constant(self):
         """Return True if this numeric value is a constant value"""
         return False
@@ -614,28 +629,8 @@ class NumericValue(object):
         """Return True if this is a non-constant value that has been fixed"""
         return False
 
-    def is_parameter_type(self):
-        """Return False unless this class is a parameter object"""
-        return False
-
-    def is_variable_type(self):
-        """Return False unless this class is a variable object"""
-        return False
-
     def is_potentially_variable(self):
         """Return True if variables can appear in this expression"""
-        return True
-
-    def is_named_expression_type(self):
-        """Return True if this numeric value is a named expression"""
-        return False
-
-    def is_expression_type(self):
-        """Return True if this numeric value is an expression"""
-        return False
-
-    def is_component_type(self):
-        """Return True if this class is a Pyomo component"""
         return False
 
     def is_relational(self):
@@ -1016,9 +1011,6 @@ class NumericConstant(NumericValue):
     def is_fixed(self):
         return True
 
-    def is_potentially_variable(self):
-        return False
-
     def _compute_polynomial_degree(self, result):
         return 0
 
@@ -1043,6 +1035,9 @@ class NumericConstant(NumericValue):
         if ostream is None:         #pragma:nocover
             ostream = sys.stdout
         ostream.write(str(self))
+
+
+pyomo_constant_types.add(NumericConstant)
 
 
 # We use as_numeric() so that the constant is also in the cache

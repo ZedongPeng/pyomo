@@ -14,7 +14,7 @@ import logging
 import sys
 import types
 
-from six import itervalues
+from six import itervalues, string_types
 
 logger = logging.getLogger('pyomo.core')
 
@@ -124,25 +124,35 @@ class _robust_sort_keyfcn(object):
         argument of the sort key.
 
         """
-        _type = type(val)
-        if _type not in self._typemap:
+        try:
+            i, _typename = self._typemap[val.__class__]
+        except KeyError:
             # If this is not a type we have seen before, determine what
             # to use for the second value in the tuple.
+            _type = val.__class__
+            _typename = _type.__name__
             try:
-                # 1: Check if the type is comparable
+                # 1: Check if the type is comparable.  In Python 3, sorted()
+                #    uses "<" to compare objects.
                 val < val
-                self._typemap[_type] = lambda x:x
+                i = 1
             except:
                 try:
                     # 2: try converting the value to string
                     str(val)
-                    self._typemap[_type] = lambda x:str(x)
+                    i = 2
                 except:
                     # 3: fallback on id().  Not deterministic
-                    # (run-to-run), but at least is consistent within
-                    # this run.
-                    self._typemap[_type] = lambda x:id(x)
-        return _type.__name__, self._typemap[_type](val)
+                    #    (run-to-run), but at least is consistent within
+                    #    this run.
+                    i = 3
+            self._typemap[_type] = i, _typename
+        if i == 1:
+            return _typename, val
+        elif i == 2:
+            return _typename, str(val)
+        else:
+            return _typename, id(val)
 
 
 def sorted_robust(arg):
@@ -154,17 +164,33 @@ def sorted_robust(arg):
     (above) to generate sortable keys.
 
     """
+    # It is possible that arg is a generator.  We need to cache the
+    # elements returned by the generator in case 'sorted' raises an
+    # exception (this ensures we don't loose any elements).  Howevver,
+    # if we were passed a list, we do not want to make an unnecessary
+    # copy.  Tuples are OK because tuple(a) will not copy a if it is
+    # already a tuple.
+    if type(arg) is not list:
+        arg = tuple(arg)
     try:
         return sorted(arg)
     except:
         return sorted(arg, key=_robust_sort_keyfcn())
 
 
-def _safe_to_str(obj):
-    try:
-        return str(obj)
-    except:
-        return "None"
+def _to_ustr(obj):
+    if not isinstance(obj, string_types):
+        try:
+            obj = str(obj)
+        except:
+            return u"None"
+    # If this is a Python 2.x string, then we want to decode it to a
+    # proper unicode string so that len() counts embedded multibyte
+    # characters as a single codepoint (so the resulting tabular
+    # alignment is correct)
+    if hasattr(obj, 'decode'):
+        return obj.decode('utf-8')
+    return obj
 
 def tabular_writer(ostream, prefix, data, header, row_generator):
     """Output data in tabular form
@@ -178,12 +204,14 @@ def tabular_writer(ostream, prefix, data, header, row_generator):
       line of the table
     """
 
+    prefix = _to_ustr(prefix)
+
     _rows = {}
     #_header = ("Key","Initial Value","Lower Bound","Upper Bound",
     #           "Current Value","Fixed","Stale")
     # NB: _width is a list because we will change these values
     if header:
-        header = ('Key',) + tuple(header)
+        header = (u"Key",) + tuple(_to_ustr(x) for x in header)
         _width = [len(x) for x in header]
     else:
         _width = None
@@ -197,13 +225,13 @@ def tabular_writer(ostream, prefix, data, header, row_generator):
 
         if isinstance(_rowSet, types.GeneratorType):
             _rows[_key] = [
-                ((_safe_to_str("" if i else _key),) if header else ()) +
-                tuple( _safe_to_str(x) for x in _r )
+                ((_to_ustr("" if i else _key),) if header else ()) +
+                tuple( _to_ustr(x) for x in _r )
                 for i,_r in enumerate(_rowSet) ]
         else:
             _rows[_key] = [
-                ((_safe_to_str(_key),) if header else ()) +
-                tuple( _safe_to_str(x) for x in _rowSet) ]
+                ((_to_ustr(_key),) if header else ()) +
+                tuple( _to_ustr(x) for x in _rowSet) ]
 
         for _row in _rows[_key]:
             if not _width:
