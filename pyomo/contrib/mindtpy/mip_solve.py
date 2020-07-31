@@ -63,7 +63,7 @@ def solve_OA_master(solve_data, config):
     main_objective.deactivate()
 
     # setup objective function
-    if config.strategy in ['OA']:
+    if config.strategy == 'OA':
         sign_adjust = 1 if main_objective.sense == minimize else - 1
         MindtPy.del_component('MindtPy_oa_obj')
 
@@ -82,9 +82,13 @@ def solve_OA_master(solve_data, config):
                 expr=main_objective.expr,
                 sense=main_objective.sense)
     # We are using this hack to define the FP-MILP problem. Please check
-    elif config.strategy is 'feas_pump':
+    elif config.strategy == 'feas_pump':
+        
+        if MindtPy.find_component('feas_pump_mip_obj') is not None:
+            MindtPy.del_component('feas_pump_mip_obj')
+        
         MindtPy.feas_pump_mip_obj = generate_L1_objective_function(
-            master_mip,
+            solve_data.mip,
             solve_data.working_model,
             discretes_only=True)
     # Deactivate extraneous IMPORT/EXPORT suffixes
@@ -113,7 +117,7 @@ def solve_OA_master(solve_data, config):
         mip_args['add_options'] = mip_args.get('add_options', [])
         mip_args['add_options'].append('option optcr=0.0;')
     master_mip_results = masteropt.solve(
-        solve_data.mip, **mip_args)  # , tee=True)
+        solve_data.mip, **mip_args , tee=True)
 
     if master_mip_results.solver.termination_condition is tc.optimal:
         if config.single_tree:
@@ -162,25 +166,25 @@ def handle_master_mip_optimal(master_mip, solve_data, config):
         main_objective = next(solve_data.mip.component_data_objects(Objective, active=True))
 
     # check if the value of binary variable is valid
-    for var in MindtPy.variable_list:
+    for var in master_mip.MindtPy_utils.variable_list:
         if var.value is None and var.is_integer():
             config.logger.warning(
                 "Integer variable {} not initialized. It is set to it's lower bound when using the initial_binary initialization method".format(var.name))
             var.value = var.lb  # nlp_var.bounds[0]
     
     # warm start for the nlp subproblem
-    if config.strategy in ['OA']:
+    if config.strategy == 'OA':
         copy_var_list_values(
             master_mip.MindtPy_utils.variable_list,
             solve_data.working_model.MindtPy_utils.variable_list,
             config)
-    elif config.strategy is 'feas_pump':
+    elif config.strategy == 'feas_pump':
         copy_var_list_values(
             master_mip.MindtPy_utils.variable_list,
             solve_data.mip.MindtPy_utils.variable_list,
             config)
 
-    if config.strategy in ['OA']:
+    if config.strategy == 'OA':
         if main_objective.sense == minimize:
             solve_data.LB = max(
                 main_objective.expr(), solve_data.LB)

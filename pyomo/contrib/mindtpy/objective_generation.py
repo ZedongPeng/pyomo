@@ -40,7 +40,7 @@ def generate_L1_objective_function(model, setpoint_model, discretes_only=False):
     model_vars = list(filter(var_filter, model.component_data_objects(Var)))
     setpoint_vars = list(filter(var_filter, setpoint_model.component_data_objects(Var)))
     assert len(model_vars) == len(setpoint_vars), "Trying to generate L1 objective function for models with different number of variables"
-
+        
     obj_blk = model.L1_objective_function = Block()
 
     obj_blk.L1_obj_var = Var(domain=Reals, bounds=(0, None))

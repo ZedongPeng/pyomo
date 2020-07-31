@@ -16,6 +16,8 @@ from pyomo.contrib.mindtpy.objective_generation import generate_L2_objective_fun
 from pyomo.contrib.gdpopt.util import is_feasible
 
 # Justin: Check this new argument always_solve_fix_nlp. Do we need it?
+# Thought: this parameter does make things easier when solving fixed nlp in fp. 
+# Maybe we can rename it to "fix_discrete" or something to make it more intuitive?
 def solve_NLP_subproblem(solve_data, config, always_solve_fix_nlp=False):
     """
     Solves the fixed NLP (with fixed binaries)
@@ -29,7 +31,8 @@ def solve_NLP_subproblem(solve_data, config, always_solve_fix_nlp=False):
         data container that holds solve-instance data
     config: ConfigBlock
         contains the specific configurations for the algorithm
-
+    always_solve_fix_nlp: boolean value
+        Default to False; set to true when solving fixed NLP in feasibility pump.
     Returns
     -------
     fixed_nlp: Pyomo model
@@ -39,7 +42,7 @@ def solve_NLP_subproblem(solve_data, config, always_solve_fix_nlp=False):
 
     Note: Solves either fixed NLP (OA type methods) or feas-pump NLP
 
-        Sets up local working model `sub_nlp`
+        Sets up local working model `fixed_nlp`
         Fixes binaries (OA) / Sets objective (feas-pump)
         Sets continuous variables to initial var values
         Precomputes dual values
@@ -53,24 +56,23 @@ def solve_NLP_subproblem(solve_data, config, always_solve_fix_nlp=False):
     MindtPy = fixed_nlp.MindtPy_utils
     solve_data.nlp_iter += 1
 
-    # Set up NLP
-    if config.strategy in ['OA'] or always_solve_fix_nlp:
-        config.logger.info('NLP %s: Solve subproblem for fixed discretes.'
-                           % (solve_data.nlp_iter,))
-        TransformationFactory('core.fix_integer_vars').apply_to(fixed_nlp)
+    config.logger.info('NLP %s: Solve subproblem for fixed discretes.'
+                        % (solve_data.nlp_iter,))
+    TransformationFactory('core.fix_integer_vars').apply_to(fixed_nlp)
+    main_objective = next(fixed_nlp.component_data_objects(Objective, active=True))
 
-        main_objective = next(fixed_nlp.component_data_objects(Objective, active=True))
-        if main_objective.sense == 'minimize':
+    # Set up NLP
+    if config.strategy == 'feas_pump':
+
+        if main_objective.sense == 'minimize' and solve_data.UB != float('+inf'):
             fixed_nlp.increasing_objective_cut = Constraint(
                 expr=fixed_nlp.MindtPy_utils.objective_value
-                     <= solve_data.UB - config.feas_pump_delta*min(1e-4, abs(solve_data.UB)))
-        else:
+                     <= solve_data.UB - config.feas_pump_delta*min(config.zero_tolerance, abs(solve_data.UB)))
+        elif main_objective.sense == 'maximize' and solve_data.LB != float('-inf'):
             fixed_nlp.increasing_objective_cut = Constraint(
                 expr=fixed_nlp.MindtPy_utils.objective_value
-                     >= solve_data.LB + config.feas_pump_delta*min(1e-4, abs(solve_data.LB)))
-    elif config.strategy is 'feas_pump':
-        TransformationFactory('core.relax_integrality').apply_to(fixed_nlp)
-        main_objective = next(fixed_nlp.component_data_objects(Objective, active=True))
+                     >= solve_data.LB + config.feas_pump_delta*max(config.zero_tolerance, abs(solve_data.LB)))
+        
         main_objective.deactivate()
         MindtPy.feas_pump_nlp_obj = generate_L2_objective_function(
             fixed_nlp,
@@ -120,11 +122,12 @@ def solve_NLP_subproblem(solve_data, config, always_solve_fix_nlp=False):
     # Solve the NLP
     with SuppressInfeasibleWarning():
         results = SolverFactory(config.nlp_solver).solve(
-            fixed_nlp, **config.nlp_solver_args)
+            fixed_nlp, **config.nlp_solver_args, tee = True) # Justin don't forget to delete tee=True when done
+    #Since the actual step of computing the nlp depends on the nlp_solver, it's possible that the inner loop of fp is missed here.
     return fixed_nlp, results
 
 # The next few functions deal with handling the solution we get from the above NLP solver function
-def handle_NLP_subproblem_optimal(sub_nlp, solve_data, config):
+def handle_NLP_subproblem_optimal(fixed_nlp, solve_data, config):
     """
     This function copies the result of the NLP solver function ('solve_NLP_subproblem') to the working model, updates
     the bounds, adds OA and integer cuts, and then stores the new solution if it is the new best solution. This
@@ -153,26 +156,26 @@ def handle_NLP_subproblem_optimal(sub_nlp, solve_data, config):
     dual_values = list(fixed_nlp.dual[c]
                        for c in fixed_nlp.MindtPy_utils.constraint_list)
 
-    main_objective = next(
-        fixed_nlp.component_data_objects(Objective, active=True))  
+    # main_objective = next(
+    #     fixed_nlp.component_data_objects(Objective, active=True))  
     # this is different to original objective for feasibility pump
 
     # Justin: This might be neccesary to make the code work
 
-    # main_objective = next(
-    #         solve_data.working_model.component_data_objects(
-    #             Objective,
-    #             active=True))  # this is different to original objective for feasibility pump
+    main_objective = next(
+            solve_data.working_model.component_data_objects(
+                Objective,
+                active=True))  # this is different to original objective for feasibility pump
 
 
 
     # if OA-like or feas_pump converged, update Upper bound,
     # add no_good cuts and increasing objective cuts (feas_pump)
     if config.strategy in ['OA'] or (
-        config.strategy is 'feas_pump'
+        config.strategy == 'feas_pump'
         and feas_pump_converged(solve_data, config)
     ):
-        if config.strategy is 'feas_pump':
+        if config.strategy == 'feas_pump':
             copy_var_list_values(solve_data.mip.MindtPy_utils.variable_list,
                                  solve_data.working_model.MindtPy_utils.variable_list,
                                  config)
@@ -192,11 +195,15 @@ def handle_NLP_subproblem_optimal(sub_nlp, solve_data, config):
             solve_data.UB_progress.append(solve_data.UB)
 
             if solve_data.solution_improved and config.strategy == 'feas_pump':
-                solve_data.mip.MindtPy_utils.MindtPy_linear_cuts.\
-                    increasing_objective_cut.set_value(
-                        expr=solve_data.mip.MindtPy_utils.objective_value 
-                             <= solve_data.UB - config.feas_pump_delta*min(1e-4, abs(solve_data.UB)))
-                             # This 1e-4 is nasty, let's add a config option for this
+                if solve_data.mip.find_component('increasing_objective_cut'):
+                    solve_data.mip.MindtPy_utils.MindtPy_linear_cuts.\
+                        increasing_objective_cut.set_value(
+                            expr=solve_data.mip.MindtPy_utils.objective_value 
+                                <= solve_data.UB - config.feas_pump_delta*min(config.zero_tolerance, abs(solve_data.UB)))
+                else:
+                   solve_data.mip.MindtPy_utils.MindtPy_linear_cuts.\
+                        increasing_objective_cut = Constraint(expr=solve_data.mip.MindtPy_utils.objective_value
+                            <= solve_data.UB - config.feas_pump_delta*min(config.zero_tolerance, abs(solve_data.UB)))
         else:
             solve_data.LB = max(
                 main_objective.expr(),
@@ -206,15 +213,16 @@ def handle_NLP_subproblem_optimal(sub_nlp, solve_data, config):
             solve_data.LB_progress.append(solve_data.LB)
 
             if solve_data.solution_improved and config.strategy == 'feas_pump':
-                solve_data.mip.MindtPy_utils.MindtPy_linear_cuts.\
-                    increasing_objective_cut.set_value(
-                        expr=solve_data.mip.MindtPy_utils.objective_value
-                             >= solve_data.LB + config.feas_pump_delta*min(1e-4, abs(solve_data.LB)))
-                             # see comment above
+                if solve_data.mip.find_component('increasing_objective_cut'):
+                    solve_data.mip.MindtPy_utils.MindtPy_linear_cuts.\
+                        increasing_objective_cut.set_value(
+                            expr=solve_data.mip.MindtPy_utils.objective_value
+                                >= solve_data.LB + config.feas_pump_delta*max(config.zero_tolerance, abs(solve_data.LB)))
+                else:
+                   solve_data.mip.MindtPy_utils.MindtPy_linear_cuts.\
+                        increasing_objective_cut = Constraint(expr=solve_data.mip.MindtPy_utils.objective_value 
+                            >= solve_data.LB + config.feas_pump_delta*max(config.zero_tolerance, abs(solve_data.LB)))
 
-        if config.add_integer_cut or config.strategy is 'feas_pump':
-            config.logger.info('Creating no-good cut')
-            add_int_cut(solve_data.mip, config)
 
     if main_objective.sense == minimize:
         solve_data.UB = min(value(main_objective.expr), solve_data.UB)
@@ -231,7 +239,8 @@ def handle_NLP_subproblem_optimal(sub_nlp, solve_data, config):
 
     if solve_data.solution_improved:
         solve_data.best_solution_found = fixed_nlp.clone()
-        # Justin: Check this assert
+        # Justin: Check this assert. Document is_feasible
+        # Thought: this shouldn't be a problem as this function(defined in gdpopt/util.py) is_feasible is based on tolerance in config.
         assert is_feasible(solve_data.best_solution_found, config), \
                "Best found model infeasible! There might be a problem with the precisions - the feaspump seems to have converged (error**2 <= integer_tolerance). " \
                "But the `is_feasible` check (error <= constraint_tolerance) doesn't work out"
@@ -248,10 +257,10 @@ def handle_NLP_subproblem_optimal(sub_nlp, solve_data, config):
     #     add_gbd_cut(solve_data, config)
     
     var_values = list(v.value for v in fixed_nlp.MindtPy_utils.variable_list)
-    if config.add_no_good_cuts:
+    if config.add_no_good_cuts or config.strategy == 'feas_pump':
         add_int_cut(var_values, solve_data, config, feasible=True)
 
-    config.call_after_subproblem_feasible(sub_nlp, solve_data)
+    config.call_after_subproblem_feasible(fixed_nlp, solve_data)
 
 def handle_NLP_subproblem_infeasible(fixed_nlp, solve_data, config):
     """
@@ -423,10 +432,21 @@ def solve_NLP_feas(solve_data, config):
 
     return feas_nlp, feas_soln
 
-
+#Thought: for this function, I 
 def feas_pump_converged(solve_data, config):
-    # Justin: Include documentation
-    """Calculates the euclidean norm between the discretes in the mip and nlp models"""
+    """
+    Calculates the euclidean norm between the discretes in the mip and nlp models
+    
+    Parameters
+    ----------
+    solve_data: MindtPy Data Container
+        data container that holds solve-instance data
+    config: ConfigBlock
+        contains the specific configurations for the algorithm
+
+    Returns True if the solutin of the discrete variables in mip and nlp models converged.
+    
+    """
     distance = (sum((nlp_var.value - milp_var.value)**2
                     for (nlp_var, milp_var) in
                     zip(solve_data.working_model.MindtPy_utils.variable_list,

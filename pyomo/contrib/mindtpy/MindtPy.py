@@ -123,7 +123,7 @@ class MindtPySolver(object):
             "more than this tolerance, the method will keep iterating."
     ))
     CONFIG.declare("feas_pump_delta", ConfigValue(
-        default=1E-1,
+        default=1E-4,
         domain=PositiveFloat,
         description="Objective increasing \delta",
         doc="Will force each new feasible point to be '\delta * abs(UB)' better than the last one"
@@ -332,7 +332,10 @@ class MindtPySolver(object):
 
             MindtPy = solve_data.working_model.MindtPy_utils
             setup_results_object(solve_data, config)
-            process_objective(solve_data, config, use_mcpp=False)
+            if config.strategy == "feas_pump":
+                process_objective(solve_data, config, use_mcpp=False, move_linear_objective=True)
+            else:
+                process_objective(solve_data, config, use_mcpp=False)
 
             # Save model initial values.
             solve_data.initial_var_values = list(

@@ -40,7 +40,7 @@ def MindtPy_initialize_master(solve_data, config):
     MindtPy = m.MindtPy_utils
     m.dual.deactivate()
 
-    if config.strategy in ['OA', 'LOA', 'feas_pump']:
+    if config.strategy in {'OA', 'LOA', 'feas_pump'}:
         calc_jacobians(solve_data, config)  # preload jacobians
         MindtPy.MindtPy_linear_cuts.oa_cuts = ConstraintList(
             doc='Outer approximation cuts')
@@ -63,6 +63,14 @@ def MindtPy_initialize_master(solve_data, config):
     if config.init_strategy is None:
         if config.strategy == 'OA':
             config.init_strategy = 'rNLP'
+        elif config.strategy is 'feas_pump':
+            # Justin: Let's consider removing this
+            # For the moment we are experimenting by moving it out of the way
+            init_rNLP(solve_data, config)  # solution is written to mip model
+            MindtPy.MindtPy_linear_cuts.increasing_objective_cut = Constraint(expr=MindtPy.objective_value <= config.obj_bound)
+            copy_var_list_values(solve_data.mip.MindtPy_utils.variable_list,
+                                solve_data.working_model.MindtPy_utils.variable_list,
+                                config, ignore_integrality=True)
         else:
             config.init_strategy = 'max_binary'
     # Do the initialization
@@ -84,12 +92,7 @@ def MindtPy_initialize_master(solve_data, config):
                                                     solve_data, config)
 
 
-    if config.strategy is 'feas_pump':
-        init_rNLP(solve_data, config)  # solution is written to mip model
-        MindtPy.MindtPy_linear_cuts.increasing_objective_cut = Constraint(expr=MindtPy.objective_value <= config.obj_bound)
-        copy_var_list_values(solve_data.mip.MindtPy_utils.variable_list,
-                             solve_data.working_model.MindtPy_utils.variable_list,
-                             config, ignore_integrality=True)
+    
 
 def init_rNLP(solve_data, config):
     """

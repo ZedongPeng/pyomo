@@ -24,38 +24,38 @@ else:
                  % (required_solvers,))
 @unittest.skipIf(not pyomo.core.base.symbolic.differentiate_available,
                  "Symbolic differentiation is not available")
-class TestMindtPy(unittest.TestCase):
-    """Tests for the MindtPy solver plugin."""
+class TestFeaspump(unittest.TestCase):
+    """Tests for the Feasibility pump solver plugin."""
 
     def get_config(self, solver):
         config = solver.CONFIG
         return config
 
-    def test_feas_pump_8PP(self):
-        """Test the outer approximation decomposition algorithm."""
-        with SolverFactory('mindtpy') as opt:
-            model = EightProcessFlowsheet()
-            print('\n Solving feasibility pump')
-            results = opt.solve(model, strategy='feas_pump',
-                               mip_solver=required_solvers[1],
-                               nlp_solver=required_solvers[0],
-                               iteration_limit=30,
-                               integer_to_binary=True)
+    # def test_feas_pump_8PP(self):
+    #     """Test the outer approximation decomposition algorithm."""
+    #     with SolverFactory('mindtpy') as opt:
+    #         model = EightProcessFlowsheet()
+    #         print('\n Solving feasibility pump')
+    #         results = opt.solve(model, strategy='feas_pump',
+    #                            mip_solver=required_solvers[1],
+    #                            nlp_solver=required_solvers[0],
+    #                            iteration_limit=30,
+    #                            integer_to_binary=True)
 
-            self.assertTrue(is_feasible(model, self.get_config(opt)))
+    #         self.assertTrue(is_feasible(model, self.get_config(opt)))
 
-    def test_feas_pump_8PP_init_max_binary(self):
-        """Test the outer approximation decomposition algorithm."""
-        with SolverFactory('mindtpy') as opt:
-            model = EightProcessFlowsheet()
-            print('\n Solving feasibility pump')
-            results = opt.solve(model, strategy='feas_pump',
-                               mip_solver=required_solvers[1],
-                               nlp_solver=required_solvers[0],
-                               iteration_limit=30,
-                               integer_to_binary=True)
+    # def test_feas_pump_8PP_init_max_binary(self):
+    #     """Test the outer approximation decomposition algorithm."""
+    #     with SolverFactory('mindtpy') as opt:
+    #         model = EightProcessFlowsheet()
+    #         print('\n Solving feasibility pump')
+    #         results = opt.solve(model, strategy='feas_pump',
+    #                            mip_solver=required_solvers[1],
+    #                            nlp_solver=required_solvers[0],
+    #                            iteration_limit=30,
+    #                            integer_to_binary=True)
 
-            self.assertTrue(is_feasible(model, self.get_config(opt)))
+    #         self.assertTrue(is_feasible(model, self.get_config(opt)))
 
     def test_feas_pump_MINLP_simple(self):
         """Test the outer approximation decomposition algorithm."""
@@ -63,70 +63,62 @@ class TestMindtPy(unittest.TestCase):
             model = SimpleMINLP()
             print('\n Solving feasibility pump')
             results = opt.solve(model, strategy='feas_pump',
+                               init_strategy='initial_binary',
                                mip_solver=required_solvers[1],
                                nlp_solver=required_solvers[0],
-                               iteration_limit=30,
-                               integer_to_binary=True)
+                               iteration_limit=30)
 
-            self.assertTrue(is_feasible(model, self.get_config(opt)))
-
-
-    def test_feas_pump_MINLP2_simple(self):
-        """Test the outer approximation decomposition algorithm."""
-        with SolverFactory('mindtpy') as opt:
-            model = SimpleMINLP2()
-            print('\n Solving feasibility pump')
-            results = opt.solve(model, strategy='feas_pump',
-                               mip_solver=required_solvers[1],
-                               nlp_solver=required_solvers[0],
-                               iteration_limit=30,
-                               integer_to_binary=True)
-
-            self.assertTrue(is_feasible(model, self.get_config(opt)))
+            # self.assertTrue(is_feasible(model, self.get_config(opt)))
+            
+            print(results)
+            model.display()
+            self.assertIs(results.solver.termination_condition,
+                          TerminationCondition.optimal)
+            self.assertAlmostEqual(value(model.cost.expr), 3.5, places=2)
 
 
-    def test_feas_pump_MINLP3_simple(self):
-        """Test the outer approximation decomposition algorithm."""
-        with SolverFactory('mindtpy') as opt:
-            model = SimpleMINLP3()
-            print('\n Solving feasibility pump')
-            results = opt.solve(model, strategy='feas_pump',
-                               mip_solver=required_solvers[1],
-                               nlp_solver=required_solvers[0],
-                               iteration_limit=30,
-                               integer_to_binary=True)
+    # def test_feas_pump_MINLP2_simple(self):
+    #     """Test the outer approximation decomposition algorithm."""
+    #     with SolverFactory('mindtpy') as opt:
+    #         model = SimpleMINLP2()
+    #         print('\n Solving feasibility pump')
+    #         results = opt.solve(model, strategy='feas_pump',
+    #                            mip_solver=required_solvers[1],
+    #                            nlp_solver=required_solvers[0],
+    #                            iteration_limit=30,
+    #                            integer_to_binary=True)
 
-            self.assertTrue(is_feasible(model, self.get_config(opt)))
-
-
-    def test_feas_pump_Proposal(self):
-        """Test the outer approximation decomposition algorithm."""
-        with SolverFactory('mindtpy') as opt:
-            model = ProposalModel()
-            print('\n Solving feasibility pump')
-            results = opt.solve(model, strategy='feas_pump',
-                               mip_solver=required_solvers[1],
-                               nlp_solver=required_solvers[0],
-                               iteration_limit=30,
-                               integer_to_binary=True)
-
-            self.assertTrue(is_feasible(model, self.get_config(opt)))
+    #         self.assertTrue(is_feasible(model, self.get_config(opt)))
 
 
-    def test_feas_pump_Proposal_with_int_cuts(self):
-        """Test the outer approximation decomposition algorithm."""
-        with SolverFactory('mindtpy') as opt:
-            model = ProposalModel()
-            print('\n Solving feasibility pump')
-            results = opt.solve(model, strategy='feas_pump',
-                               mip_solver=required_solvers[1],
-                               nlp_solver=required_solvers[0],
-                               iteration_limit=30,
-                               integer_to_binary=True)
+    # def test_feas_pump_MINLP3_simple(self):
+    #     """Test the outer approximation decomposition algorithm."""
+    #     with SolverFactory('mindtpy') as opt:
+    #         model = SimpleMINLP3()
+    #         print('\n Solving feasibility pump')
+    #         results = opt.solve(model, strategy='feas_pump',
+    #                            mip_solver=required_solvers[1],
+    #                            nlp_solver=required_solvers[0],
+    #                            iteration_limit=30,
+    #                            integer_to_binary=True,
+    #                            tee=True)
 
-            self.assertTrue(is_feasible(model, self.get_config(opt)))
+    #         self.assertTrue(is_feasible(model, self.get_config(opt)))
+
+    # def test_feas_pump_Proposal_with_int_cuts(self):
+    #     """Test the outer approximation decomposition algorithm."""
+    #     with SolverFactory('mindtpy') as opt:
+    #         model = ProposalModel()
+    #         print('\n Solving feasibility pump')
+    #         results = opt.solve(model, strategy='feas_pump',
+    #                            mip_solver=required_solvers[1],
+    #                            nlp_solver=required_solvers[0],
+    #                            iteration_limit=30,
+    #                            integer_to_binary=True)
+
+    #         self.assertTrue(is_feasible(model, self.get_config(opt)))
 
 
 if __name__ == "__main__":
-    tests = TestMindtPy()
-    tests.test_feas_pump_Proposal()
+    tests = TestFeaspump()
+    tests.test_feas_pump_MINLP_simple()

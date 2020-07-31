@@ -202,7 +202,7 @@ def algorithm_should_terminate(solve_data, config, check_cycling):
                     solve_data.LB, config.bound_tolerance, solve_data.UB))
             solve_data.results.solver.termination_condition = tc.optimal
             return True
-    elif config.strategy is 'feas_pump':
+    elif config.strategy == 'feas_pump':
         # feasability pump termination comes from infeasibility of the MIP
         pass
 
