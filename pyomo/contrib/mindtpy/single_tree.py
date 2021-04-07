@@ -26,7 +26,7 @@ from pyomo.contrib.mcpp.pyomo_mcpp import McCormick as mc, MCPP_Error
 from pyomo.opt.results import ProblemSense
 from pyomo.contrib.mindtpy.mip_solve import handle_main_optimal, solve_main
 from pyomo.contrib.mindtpy.cut_generation import add_oa_cuts
-
+from pyomo.opt import SolverStatus
 
 logger = logging.getLogger('pyomo.contrib.mindtpy')
 
@@ -336,7 +336,7 @@ class LazyOACallback_cplex(LazyConstraintCallback):
             'MIP %s: OBJ (at current node): %s  Bound: %s  LB: %s  UB: %s  TIME: %s'
             % (solve_data.mip_iter, self.get_objective_value(), self.get_best_objective_value(),
                 solve_data.LB, solve_data.UB, round(get_main_elapsed_time(
-                solve_data.timing),2)))
+                solve_data.timing), 2)))
 
     def handle_lazy_subproblem_optimal(self, fixed_nlp, solve_data, config, opt):
         """
@@ -371,10 +371,9 @@ class LazyOACallback_cplex(LazyConstraintCallback):
             solve_data.LB = max(value(main_objective.expr), solve_data.LB)
             solve_data.solution_improved = solve_data.LB > solve_data.LB_progress[-1]
             solve_data.LB_progress.append(solve_data.LB)
-
         config.logger.info(
             'Fixed-NLP {}: OBJ: {}  LB: {}  UB: {}  TIME: {}'
-            .format(solve_data.nlp_iter, value(main_objective.expr), solve_data.LB, solve_data.UB, round(get_main_elapsed_time(solve_data.timing),2)))
+            .format(solve_data.nlp_iter, value(main_objective.expr), solve_data.LB, solve_data.UB, round(get_main_elapsed_time(solve_data.timing), 2)))
 
         if solve_data.solution_improved:
             solve_data.best_solution_found = fixed_nlp.clone()
@@ -438,18 +437,49 @@ class LazyOACallback_cplex(LazyConstraintCallback):
         config.logger.info('Solving feasibility problem')
         feas_subproblem, feas_subproblem_results = solve_feasibility_subproblem(
             solve_data, config)
-        # In OA algorithm, OA cuts are generated based on the solution of the subproblem
-        # We need to first copy the value of variables from the subproblem and then add cuts
-        copy_var_list_values(feas_subproblem.MindtPy_utils.variable_list,
-                             solve_data.mip.MindtPy_utils.variable_list,
-                             config)
-        if config.strategy == 'OA':
-            self.add_lazy_oa_cuts(
-                solve_data.mip, dual_values, solve_data, config, opt)
+        subprob_terminate_cond = feas_subproblem_results.solver.termination_condition
+        if subprob_terminate_cond in {tc.optimal, tc.locallyOptimal, tc.feasible}:
+            copy_var_list_values(feas_subproblem.MindtPy_utils.variable_list,
+                                 solve_data.mip.MindtPy_utils.variable_list,
+                                 config)
+            if config.strategy == 'OA':
+                self.add_lazy_oa_cuts(
+                    solve_data.mip, dual_values, solve_data, config, opt)
             if config.add_regularization is not None:
                 add_oa_cuts(solve_data.mip, dual_values, solve_data, config)
-        elif config.strategy == 'GOA':
-            self.add_lazy_affine_cuts(solve_data, config, opt)
+            elif config.strategy == 'GOA':
+                self.add_lazy_affine_cuts(solve_data, config, opt)
+            # if config.strategy == 'OA':
+            #     add_oa_cuts(solve_data.mip, dual_values, solve_data, config)
+            # elif config.strategy == 'GOA':
+            #     add_affine_cuts(solve_data, config)
+        elif subprob_terminate_cond in {tc.infeasible, tc.noSolution}:
+            config.logger.error('Feasibility subproblem infeasible. '
+                                'This should never happen.')
+            if config.strategy == 'GOA':
+                pass
+            else:
+                solve_data.should_terminate = True
+                solve_data.results.solver.status = SolverStatus.error
+                return
+        elif subprob_terminate_cond is tc.maxIterations:
+            config.logger.error('Subsolver reached its maximum number of iterations without converging, '
+                                'consider increasing the iterations limit of the subsolver or reviewing your formulation.')
+            solve_data.should_terminate = True
+            solve_data.results.solver.status = SolverStatus.error
+            return
+        else:
+            config.error('MindtPy unable to handle feasibility subproblem termination condition '
+                         'of {}'.format(subprob_terminate_cond))
+            solve_data.should_terminate = True
+            solve_data.results.solver.status = SolverStatus.error
+            return
+
+        if value(feas_subproblem.MindtPy_utils.feas_obj.expr) <= config.zero_tolerance:
+            config.logger.warning('The objective value %.4E of feasibility problem is less than zero_tolerance. '
+                                  'This indicates that the nlp subproblem is feasible, although it is found infeasible in the previous step. '
+                                  'Check the nlp solver output' % value(feas_subproblem.MindtPy_utils.feas_obj.expr))
+        # Add a no-good cut to exclude this discrete combination
         if config.add_no_good_cuts:
             var_values = list(
                 v.value for v in fixed_nlp.MindtPy_utils.variable_list)
@@ -482,7 +512,7 @@ class LazyOACallback_cplex(LazyConstraintCallback):
                 'MindtPy unable to handle NLP subproblem termination '
                 'condition of {}'.format(termination_condition))
 
-    def handle_lazy_regularization_problem(self,main_mip, main_mip_results,solve_data, config):
+    def handle_lazy_regularization_problem(self, main_mip, main_mip_results, solve_data, config):
         if main_mip_results.solver.termination_condition in {tc.optimal, tc.feasible}:
             handle_main_optimal(
                 main_mip, solve_data, config, update_bound=False)
@@ -548,11 +578,9 @@ class LazyOACallback_cplex(LazyConstraintCallback):
                 'of %s. Solver message: %s' %
                 (main_mip_results.solver.termination_condition, main_mip_results.solver.message))
 
-
-
     def __call__(self):
         """
-        This is an inherent function in LazyConstraintCallback in cplex. 
+        This is an inherent function in LazyConstraintCallback in cplex.
         This function is called whenever the a integer solution is found during the branch and bound process
         """
         solve_data = self.solve_data
@@ -602,17 +630,25 @@ class LazyOACallback_cplex(LazyConstraintCallback):
 
         # check if the same integer combination is obtained.
         solve_data.curr_int_sol = get_integer_solution(
-            solve_data.working_model,string_zero=True)
+            solve_data.working_model, string_zero=True)
 
         if solve_data.curr_int_sol in set(solve_data.integer_list):
+
+
+<< << << < HEAD
+            config.logger.info('This integer combination has been explored.'
+                               'We will skip solving the fixed NLP subproblem.')
+== == == =
             config.logger.info('This integer combination has been explored. '
                                 'We will skip solving the Fixed-NLP subproblem.')
             solve_data.solution_improved = False
+>>>>>> > new-lp-nlp
             if config.strategy == 'GOA':
                 if config.add_no_good_cuts:
                     var_values = list(
                         v.value for v in solve_data.working_model.MindtPy_utils.variable_list)
-                    self.add_lazy_no_good_cuts(var_values, solve_data, config, opt)
+                    self.add_lazy_no_good_cuts(
+                        var_values, solve_data, config, opt)
                 return
             elif config.strategy == 'OA':
                 return
