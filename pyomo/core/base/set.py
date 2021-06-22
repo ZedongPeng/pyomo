@@ -12,29 +12,27 @@ import inspect
 import itertools
 import logging
 import math
-import six
 import sys
 import weakref
 
-from six import iteritems, iterkeys
-from six.moves import xrange
-
-from pyomo.common.deprecation import deprecated, deprecation_warning
+from pyomo.common.deprecation import deprecated, deprecation_warning, RenamedClass
 from pyomo.common.errors import DeveloperError, PyomoException
+from pyomo.common.log import is_debug_set
 from pyomo.common.timing import ConstructionTimer
 from pyomo.core.expr.numvalue import (
     native_types, native_numeric_types, as_numeric, value,
 )
-from pyomo.core.base.plugin import ModelComponentFactory
 from pyomo.core.base.util import (
-    disable_methods, InitializerBase, Initializer, ConstantInitializer,
-    CountedCallInitializer, ItemInitializer, IndexedCallInitializer,
+    disable_methods, InitializerBase, Initializer, 
+    CountedCallInitializer, IndexedCallInitializer,
 )
 from pyomo.core.base.range import (
     NumericRange, NonNumericRange, AnyRange, RangeProduct,
     RangeDifferenceError,
 )
-from pyomo.core.base.component import Component, ComponentData
+from pyomo.core.base.component import (
+    Component, ComponentData, ModelComponentFactory,
+)
 from pyomo.core.base.indexed_component import (
     IndexedComponent, UnindexedComponent_set, normalize_index,
 )
@@ -43,14 +41,7 @@ from pyomo.core.base.global_set import (
 )
 from pyomo.core.base.misc import sorted_robust
 
-if six.PY3:
-    from collections.abc import Sequence as collections_Sequence
-    def formatargspec(fn):
-        return str(inspect.signature(fn))
-else:
-    from collections import Sequence as collections_Sequence
-    def formatargspec(fn):
-        return str(inspect.formatargspec(*inspect.getargspec(fn)))
+from collections.abc import Sequence
 
 
 logger = logging.getLogger('pyomo.core')
@@ -129,6 +120,9 @@ def process_setarg(arg):
     # DEPRECATED: This functionality has never been documented,
     # and I don't know of a use of it in the wild.
     if hasattr(arg, 'set_options'):
+        deprecation_warning("The set_options set attribute is deprecated.  "
+                            "Please explicitly construct complex sets",
+                            version='5.7.3')
         # If the argument has a set_options attribute, then use
         # it to initialize a set
         args = arg.set_options
@@ -238,7 +232,7 @@ def simple_set_rule( fn ):
         if value is None:
             return Set.End
         return value
-""" % (formatargspec(fn),)
+""" % (str(inspect.signature(fn)),)
     # Create the wrapper in a temporary environment that mimics this
     # function's environment.
     _env = dict(globals())
@@ -359,7 +353,7 @@ class BoundsInitializer(InitializerBase):
 
     def __call__(self, parent, idx):
         val = self._init(parent, idx)
-        if not isinstance(val, collections_Sequence):
+        if not isinstance(val, Sequence):
             val = (1, val, self.default_step)
         else:
             val = tuple(val)
@@ -414,7 +408,7 @@ class TuplizeValuesInitializer(InitializerBase):
         elif _val is None:
             return _val
 
-        if not isinstance(_val, collections_Sequence):
+        if not isinstance(_val, Sequence):
             _val = tuple(_val)
         if len(_val) == 0:
             return _val
@@ -438,7 +432,7 @@ class TuplizeValuesInitializer(InitializerBase):
                 "Cannot tuplize list data for set %%s%%s because its "
                 "length %s is not a multiple of dimen=%s" % (len(_val), d))
 
-        return list(tuple(_val[d*i:d*(i+1)]) for i in xrange(len(_val)//d))
+        return list(tuple(_val[d*i:d*(i+1)]) for i in range(len(_val)//d))
 
 
 class _NotFound(object):
@@ -447,7 +441,7 @@ class _NotFound(object):
 
 
 # A trivial class that we can use to test if an object is a "legitimate"
-# set (either SimpleSet, or a member of an IndexedSet)
+# set (either ScalarSet, or a member of an IndexedSet)
 class _SetDataBase(ComponentData):
     """The base for all objects that can be used as a component indexing set.
     """
@@ -649,7 +643,7 @@ class _SetData(_SetDataBase):
             if len(vals) < 2:
                 return (vals[0], vals[0], 0)
             step = vals[1]-vals[0]
-            for i in xrange(2, len(vals)):
+            for i in range(2, len(vals)):
                 if step != vals[i] - vals[i-1]:
                     return self.bounds() + (None,)
             return (vals[0], vals[-1], step)
@@ -1545,7 +1539,7 @@ class _OrderedSetData(_OrderedSetMixin, _FiniteSetData):
     def remove(self, val):
         idx = self._values.pop(val)
         self._ordered_values.pop(idx)
-        for i in xrange(idx, len(self._ordered_values)):
+        for i in range(idx, len(self._ordered_values)):
             self._values[self._ordered_values[i]] -= 1
 
     def discard(self, val):
@@ -1885,11 +1879,11 @@ class Set(IndexedComponent):
                     ))))
         if not args or (args[0] is UnindexedComponent_set and len(args)==1):
             if ordered is Set.InsertionOrder:
-                return super(Set, cls).__new__(AbstractOrderedSimpleSet)
+                return super(Set, cls).__new__(AbstractOrderedScalarSet)
             elif ordered is Set.SortedOrder:
-                return super(Set, cls).__new__(AbstractSortedSimpleSet)
+                return super(Set, cls).__new__(AbstractSortedScalarSet)
             else:
-                return super(Set, cls).__new__(AbstractFiniteSimpleSet)
+                return super(Set, cls).__new__(AbstractFiniteScalarSet)
         else:
             newObj = super(Set, cls).__new__(IndexedSet)
             if ordered is Set.InsertionOrder:
@@ -1974,7 +1968,7 @@ class Set(IndexedComponent):
         if self._constructed:
             return
         timer = ConstructionTimer(self)
-        if __debug__ and logger.isEnabledFor(logging.DEBUG):
+        if is_debug_set(logger):
                 logger.debug("Constructing Set, name=%s, from data=%r"
                              % (self.name, data))
         self._constructed = True
@@ -2192,7 +2186,7 @@ class Set(IndexedComponent):
             [("Size", len(self._data)),
              ("Index", self._index if self.is_indexed() else None),
              ("Ordered", _ordered),],
-            iteritems(self._data),
+            self._data.items(),
             ("Dimen","Domain","Size","Members",),
             lambda k, v: [
                 Set._pprint_dimen(v),
@@ -2205,15 +2199,21 @@ class Set(IndexedComponent):
 class IndexedSet(Set):
     def data(self):
         "Return a dict containing the data() of each Set in this IndexedSet"
-        return {k: v.data() for k,v in iteritems(self)}
+        return {k: v.data() for k,v in self.items()}
 
 
-class FiniteSimpleSet(_FiniteSetData, Set):
+class FiniteScalarSet(_FiniteSetData, Set):
     def __init__(self, **kwds):
         _FiniteSetData.__init__(self, component=self)
         Set.__init__(self, **kwds)
 
-class OrderedSimpleSet(_InsertionOrderSetData, Set):
+
+class FiniteSimpleSet(metaclass=RenamedClass):
+    __renamed__new_class__ = FiniteScalarSet
+    __renamed__version__ = '6.0'
+
+
+class OrderedScalarSet(_InsertionOrderSetData, Set):
     def __init__(self, **kwds):
         # In case someone inherits from us, we will provide a rational
         # default for the "ordered" flag
@@ -2222,7 +2222,13 @@ class OrderedSimpleSet(_InsertionOrderSetData, Set):
         _InsertionOrderSetData.__init__(self, component=self)
         Set.__init__(self, **kwds)
 
-class SortedSimpleSet(_SortedSetData, Set):
+
+class OrderedSimpleSet(metaclass=RenamedClass):
+    __renamed__new_class__ = OrderedScalarSet
+    __renamed__version__ = '6.0'
+
+
+class SortedScalarSet(_SortedSetData, Set):
     def __init__(self, **kwds):
         # In case someone inherits from us, we will provide a rational
         # default for the "ordered" flag
@@ -2231,17 +2237,40 @@ class SortedSimpleSet(_SortedSetData, Set):
         _SortedSetData.__init__(self, component=self)
         Set.__init__(self, **kwds)
 
+
+class SortedSimpleSet(metaclass=RenamedClass):
+    __renamed__new_class__ = SortedScalarSet
+    __renamed__version__ = '6.0'
+
+
 @disable_methods(_FINITESET_API + _SETDATA_API)
-class AbstractFiniteSimpleSet(FiniteSimpleSet):
+class AbstractFiniteScalarSet(FiniteScalarSet):
     pass
 
-@disable_methods(_ORDEREDSET_API + _SETDATA_API)
-class AbstractOrderedSimpleSet(OrderedSimpleSet):
-    pass
+
+class AbstractFiniteSimpleSet(metaclass=RenamedClass):
+    __renamed__new_class__ = AbstractFiniteScalarSet
+    __renamed__version__ = '6.0'
+
 
 @disable_methods(_ORDEREDSET_API + _SETDATA_API)
-class AbstractSortedSimpleSet(SortedSimpleSet):
+class AbstractOrderedScalarSet(OrderedScalarSet):
     pass
+
+
+class AbstractOrderedSimpleSet(metaclass=RenamedClass):
+    __renamed__new_class__ = AbstractOrderedScalarSet
+    __renamed__version__ = '6.0'
+
+
+@disable_methods(_ORDEREDSET_API + _SETDATA_API)
+class AbstractSortedScalarSet(SortedScalarSet):
+    pass
+
+
+class AbstractSortedSimpleSet(metaclass=RenamedClass):
+    __renamed__new_class__ = AbstractSortedScalarSet
+    __renamed__version__ = '6.0'
 
 
 ############################################################################
@@ -2290,7 +2319,7 @@ class SetOf(_FiniteSetMixin, _SetData, Component):
         if self._constructed:
             return
         timer = ConstructionTimer(self)
-        if __debug__ and logger.isEnabledFor(logging.DEBUG):
+        if is_debug_set(logger):
                 logger.debug("Constructing SetOf, name=%s, from data=%r"
                              % (self.name, data))
         self._constructed = True
@@ -2325,7 +2354,7 @@ class SetOf(_FiniteSetMixin, _SetData, Component):
             [("Dimen", self.dimen),
              ("Size", len(self)),
              ("Bounds", self.bounds())],
-            iteritems( {None: self} ),
+            {None: self}.items() ,
             ("Ordered", "Members",),
             lambda k, v: [
                 v.isordered(),
@@ -2442,8 +2471,7 @@ class _FiniteRangeSetData( _SortedSetMixin,
         # iterate over it
         nIters = len(self._ranges) - 1
         if not nIters:
-            for x in _FiniteRangeSetData._range_gen(self._ranges[0]):
-                yield x
+            yield from _FiniteRangeSetData._range_gen(self._ranges[0])
             return
 
         # The trick here is that we need to remove any duplicates from
@@ -2641,9 +2669,9 @@ class RangeSet(Component):
                 finite = True
 
         if finite:
-            return super(RangeSet, cls).__new__(AbstractFiniteSimpleRangeSet)
+            return super(RangeSet, cls).__new__(AbstractFiniteScalarRangeSet)
         else:
-            return super(RangeSet, cls).__new__(AbstractInfiniteSimpleRangeSet)
+            return super(RangeSet, cls).__new__(AbstractInfiniteScalarRangeSet)
 
 
     def __init__(self, *args, **kwds):
@@ -2703,12 +2731,15 @@ class RangeSet(Component):
         if self._constructed:
             return
         timer = ConstructionTimer(self)
-        if __debug__ and logger.isEnabledFor(logging.DEBUG):
+        if is_debug_set(logger):
                 logger.debug("Constructing RangeSet, name=%s, from data=%r"
                              % (self.name, data))
         if data is not None:
             raise ValueError(
-                "RangeSet.construct() does not support the data= argument.")
+                "RangeSet.construct() does not support the data= argument.\n"
+                "Initialization data (range endpoints) can only be supplied "
+                "as numbers, constants, or Params to the RangeSet() "
+                "declaration")
         self._constructed = True
 
         args, ranges = self._init_data
@@ -2885,7 +2916,7 @@ class RangeSet(Component):
             [("Dimen", self.dimen),
              ("Size", len(self) if self.isfinite() else 'Inf'),
              ("Bounds", self.bounds())],
-            iteritems( {None: self} ),
+            {None: self}.items(),
             ("Finite","Members",),
             lambda k, v: [
                 v.isfinite(),#isinstance(v, _FiniteSetMixin),
@@ -2893,7 +2924,7 @@ class RangeSet(Component):
             ])
 
 
-class InfiniteSimpleRangeSet(_InfiniteRangeSetData, RangeSet):
+class InfiniteScalarRangeSet(_InfiniteRangeSetData, RangeSet):
     def __init__(self, *args, **kwds):
         _InfiniteRangeSetData.__init__(self, component=self)
         RangeSet.__init__(self, *args, **kwds)
@@ -2901,7 +2932,13 @@ class InfiniteSimpleRangeSet(_InfiniteRangeSetData, RangeSet):
     # We want the RangeSet.__str__ to override the one in _FiniteSetMixin
     __str__ = RangeSet.__str__
 
-class FiniteSimpleRangeSet(_FiniteRangeSetData, RangeSet):
+
+class InfiniteSimpleRangeSet(metaclass=RenamedClass):
+    __renamed__new_class__ = InfiniteScalarRangeSet
+    __renamed__version__ = '6.0'
+
+
+class FiniteScalarRangeSet(_FiniteRangeSetData, RangeSet):
     def __init__(self, *args, **kwds):
         _FiniteRangeSetData.__init__(self, component=self)
         RangeSet.__init__(self, *args, **kwds)
@@ -2910,14 +2947,29 @@ class FiniteSimpleRangeSet(_FiniteRangeSetData, RangeSet):
     __str__ = RangeSet.__str__
 
 
+class FiniteSimpleRangeSet(metaclass=RenamedClass):
+    __renamed__new_class__ = FiniteScalarRangeSet
+    __renamed__version__ = '6.0'
+
+
 @disable_methods(_SET_API)
-class AbstractInfiniteSimpleRangeSet(InfiniteSimpleRangeSet):
+class AbstractInfiniteScalarRangeSet(InfiniteScalarRangeSet):
     pass
+
+
+class AbstractInfiniteSimpleRangeSet(metaclass=RenamedClass):
+    __renamed__new_class__ = AbstractInfiniteScalarRangeSet
+    __renamed__version__ = '6.0'
+
 
 @disable_methods(_ORDEREDSET_API)
-class AbstractFiniteSimpleRangeSet(FiniteSimpleRangeSet):
+class AbstractFiniteScalarRangeSet(FiniteScalarRangeSet):
     pass
 
+
+class AbstractFiniteSimpleRangeSet(metaclass=RenamedClass):
+    __renamed__new_class__ = AbstractFiniteScalarRangeSet
+    __renamed__version__ = '6.0'
 
 ############################################################################
 # Set Operators
@@ -2956,7 +3008,7 @@ class SetOperator(_SetData, Set):
         if self._constructed:
             return
         timer = ConstructionTimer(self)
-        if __debug__ and logger.isEnabledFor(logging.DEBUG):
+        if is_debug_set(logger):
                 logger.debug("Constructing SetOperator, name=%s, from data=%r"
                              % (self.name, data))
         for s in self._sets:
@@ -3075,9 +3127,8 @@ class SetOperator(_SetData, Set):
                 yield self
                 return
         for s in self._sets:
-            for ss in s.subsets(
-                    expand_all_set_operators=expand_all_set_operators):
-                yield ss
+            yield from s.subsets(
+                expand_all_set_operators=expand_all_set_operators)
 
     @property
     @deprecated("SetProduct.set_tuple is deprecated.  "
@@ -3266,8 +3317,7 @@ class SetIntersection(SetOperator):
 
     def ranges(self):
         for a in self._sets[0].ranges():
-            for r in a.range_intersection(self._sets[1].ranges()):
-                yield r
+            yield from a.range_intersection(self._sets[1].ranges())
 
     @property
     def dimen(self):
@@ -3381,8 +3431,7 @@ class SetDifference(SetOperator):
 
     def ranges(self):
         for a in self._sets[0].ranges():
-            for r in a.range_difference(self._sets[1].ranges()):
-                yield r
+            yield from a.range_difference(self._sets[1].ranges())
 
     @property
     def dimen(self):
@@ -3474,8 +3523,7 @@ class SetSymmetricDifference(SetOperator):
         assert len(self._sets) == 2
         for set_a, set_b in (self._sets, reversed(self._sets)):
             for a_r in set_a.ranges():
-                for r in a_r.range_difference(set_b.ranges()):
-                    yield r
+                yield from a_r.range_difference(set_b.ranges())
 
     @property
     def dimen(self):
@@ -3613,7 +3661,7 @@ class SetProduct(SetOperator):
         nested tuples (so this only needs to check the top-level terms)
 
         """
-        for i in xrange(len(val)-1, -1, -1):
+        for i in range(len(val)-1, -1, -1):
             if val[i].__class__ is tuple:
                 val = val[:i] + val[i] + val[i+1:]
         return val
@@ -3735,7 +3783,7 @@ class SetProduct_InfiniteSet(SetProduct):
         for cuts in self._cutPointGenerator(subsets, len(_val)):
             if all(_val[cuts[i]:cuts[i+1]] in s for i,s in enumerate(subsets)):
                 offset = index[firstNonDimSet]
-                for i in xrange(1,len(subsets)):
+                for i in range(1,len(subsets)):
                     index[firstNonDimSet+i] = offset + cuts[i]
                 return val, index
         return None
@@ -3759,7 +3807,7 @@ class SetProduct_InfiniteSet(SetProduct):
         cutIters = [None] * (len(subsets)+1)
         cutPoints = [0] * (len(subsets)+1)
         i = 1
-        cutIters[i] = iter(xrange(val_len+1))
+        cutIters[i] = iter(range(val_len+1))
         cutPoints[-1] = val_len
         while i > 0:
             try:
@@ -3768,7 +3816,7 @@ class SetProduct_InfiniteSet(SetProduct):
                     if setDims[i] is not None:
                         cutIters[i+1] = iter((cutPoints[i]+setDims[i],))
                     else:
-                        cutIters[i+1] = iter(xrange(cutPoints[i], val_len+1))
+                        cutIters[i+1] = iter(range(cutPoints[i], val_len+1))
                     i += 1
                 elif cutPoints[i] > val_len:
                     i -= 1
@@ -3835,7 +3883,7 @@ class SetProduct_OrderedSet(_OrderedSetMixin, SetProduct_FiniteSet):
         val, cutPoints = found
         if cutPoints is not None:
             val = tuple( val[cutPoints[i]:cutPoints[i+1]]
-                          for i in xrange(len(self._sets)) )
+                          for i in range(len(self._sets)) )
         _idx = tuple(s.ord(val[i])-1 for i,s in enumerate(self._sets))
         _len = list(len(_) for _ in self._sets)
         _len.append(1)
@@ -4156,16 +4204,16 @@ BooleanSet = Boolean.__class__
 # classes (leveraging the new global RangeSet objects)
 #
 
+@deprecated("RealInterval has been deprecated.  Please use "
+            "RangeSet(lower, upper, 0)", version='5.7')
 class RealInterval(RealSet):
-    @deprecated("RealInterval has been deprecated.  Please use "
-                "RangeSet(lower, upper, 0)", version='5.7')
     def __new__(cls, **kwds):
         kwds.setdefault('class_name', 'RealInterval')
         return super(RealInterval, cls).__new__(RealSet, **kwds)
 
+@deprecated("IntegerInterval has been deprecated.  Please use "
+            "RangeSet(lower, upper, 1)", version='5.7')
 class IntegerInterval(IntegerSet):
-    @deprecated("IntegerInterval has been deprecated.  Please use "
-                "RangeSet(lower, upper, 1)", version='5.7')
     def __new__(cls, **kwds):
         kwds.setdefault('class_name', 'IntegerInterval')
         return super(IntegerInterval, cls).__new__(IntegerSet, **kwds)

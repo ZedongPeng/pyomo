@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Example 1 in paper "A Feasibility Pump for mixed integer nonlinear programs"
+"""Example 1 in paper 'A Feasibility Pump for mixed integer nonlinear programs'
 
 Ref:
     Bonami P, Cornuéjols G, Lodi A, et al. A feasibility pump for mixed integer nonlinear programs[J]. Mathematical Programming, 2009, 119(2): 331-352.
@@ -11,8 +11,6 @@ Ref:
 
 """
 from __future__ import division
-
-from six import iteritems
 
 from pyomo.environ import (Binary, ConcreteModel, Constraint,
                            NonNegativeReals, Objective, Param,
@@ -26,7 +24,7 @@ class Feasibility_Pump1(ConcreteModel):
         """Create the problem."""
         kwargs.setdefault('name', 'Feasibility_Pump1')
         super(Feasibility_Pump1, self).__init__(*args, **kwargs)
-        m = self
+        model = m = self
 
         m.x = Var(within=Binary)
         m.y1 = Var(within=Reals)
@@ -38,3 +36,4 @@ class Feasibility_Pump1(ConcreteModel):
                           (m.y2-0.5) * (m.y2-0.5) <= 0.25)
         m.c2 = Constraint(expr=m.x - m.y1 <= 3)
         m.c3 = Constraint(expr=m.y2 <= 0)
+        model.optimal_value = 0

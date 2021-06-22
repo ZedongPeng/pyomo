@@ -9,7 +9,7 @@
 #  ___________________________________________________________________________
 #
 
-import pyutilib.th as unittest
+import pyomo.common.unittest as unittest
 
 from pyomo.environ import (
     ConcreteModel, AbstractModel, RangeSet, Param, Var, Set, value,
@@ -27,7 +27,6 @@ from pyomo.core.expr.template_expr import (
     substitute_template_with_value,
 )
 
-import six
 
 class TestTemplateExpressions(unittest.TestCase):
     def setUp(self):
@@ -627,7 +626,8 @@ class TestTemplateSubstitution(unittest.TestCase):
 
         self.assertEqual(
             str(E),
-            'dxdt[{TIME},2]  ==  {TIME}*x[{TIME},1]**2 + y**2 + x[{TIME},3] + x[{TIME},1]' )
+            "'dxdt[{TIME},2]'  ==  "
+            "{TIME}*'x[{TIME},1]'**2 + y**2 + 'x[{TIME},3]' + 'x[{TIME},1]'" )
 
         _map[idx1].set_value( value(m.x[value(t), 1]) )
         _map[idx2].set_value( value(m.dxdt[value(t), 2]) )
