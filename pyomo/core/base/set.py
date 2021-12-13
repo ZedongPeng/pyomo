@@ -2397,7 +2397,7 @@ class FiniteSetOf(_FiniteSetMixin, SetOf):
 
 class UnorderedSetOf(metaclass=RenamedClass):
     __renamed__new_class__ = FiniteSetOf
-    __renamed__version__ = 'TBD'
+    __renamed__version__ = '6.2'
 
 
 class OrderedSetOf(_ScalarOrderedSetMixin, _OrderedSetMixin, FiniteSetOf):
@@ -3965,7 +3965,7 @@ class _AnySet(_SetData, Set):
         Set.__init__(self, **kwds)
 
     def get(self, val, default=None):
-        return val
+        return val if val is not Ellipsis else default
 
     def ranges(self):
         yield AnyRange()
