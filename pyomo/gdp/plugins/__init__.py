@@ -9,6 +9,7 @@
 #  This software is distributed under the 3-clause BSD License.
 #  ___________________________________________________________________________
 
+
 def load():
     import pyomo.gdp.plugins.bigm
     import pyomo.gdp.plugins.hull
@@ -18,3 +19,5 @@ def load():
     import pyomo.gdp.plugins.fix_disjuncts
     import pyomo.gdp.plugins.partition_disjuncts
     import pyomo.gdp.plugins.between_steps
+    import pyomo.gdp.plugins.multiple_bigm
+    import pyomo.gdp.plugins.bound_pretransformation
