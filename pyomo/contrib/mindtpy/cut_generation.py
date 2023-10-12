@@ -184,7 +184,8 @@ def add_oa_cuts(
 def add_oa_cuts_for_grey_box(
     target_model, jacobians_model, config, objective_sense, mip_iter, cb_opt=None
 ):
-    sign_adjust = -1 if objective_sense == minimize else 1
+    sign_adjust = -1
+    # sign_adjust = -1 if objective_sense == minimize else 1
     if config.add_slack:
         slack_var = target_model.MindtPy_utils.cuts.slack_vars.add()
     for target_model_grey_box, jacobian_model_grey_box in zip(

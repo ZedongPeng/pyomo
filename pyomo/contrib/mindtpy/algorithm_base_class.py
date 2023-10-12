@@ -1014,6 +1014,13 @@ class _MindtPyAlgorithm(object):
         MindtPy = self.fixed_nlp.MindtPy_utils
         self.nlp_iter += 1
 
+        copy_var_list_values(
+            self.working_model.MindtPy_utils.variable_list,
+            MindtPy.variable_list,
+            config,
+            skip_fixed=True
+        )
+
         MindtPy.cuts.deactivate()
         if config.calculate_dual_at_solution:
             self.fixed_nlp.tmp_duals = ComponentMap()
