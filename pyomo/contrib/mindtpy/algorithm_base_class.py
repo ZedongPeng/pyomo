@@ -80,6 +80,7 @@ from pyomo.contrib.mindtpy.util import (
     set_solver_mipgap,
     set_solver_constraint_violation_tolerance,
     update_solver_timelimit,
+    customized_initialize
 )
 
 single_tree, single_tree_available = attempt_import('pyomo.contrib.mindtpy.single_tree')
@@ -1022,6 +1023,7 @@ class _MindtPyAlgorithm(object):
         )
 
         MindtPy.cuts.deactivate()
+        customized_initialize(self.fixed_nlp)
         if config.calculate_dual_at_solution:
             self.fixed_nlp.tmp_duals = ComponentMap()
             # tmp_duals are the value of the dual variables stored before using deactivate trivial constraints
