@@ -23,7 +23,7 @@ from pyomo.util.vars_from_expressions import get_vars_from_components
 from pyomo.solvers.plugins.solvers.persistent_solver import PersistentSolver
 from pyomo.common.collections import ComponentMap, Bunch, ComponentSet
 from pyomo.common.errors import InfeasibleConstraintException
-from pyomo.contrib.mindtpy.cut_generation import add_no_good_cuts
+from pyomo.contrib.mindtpy.cut_generation import add_no_good_cuts, add_baron_cuts
 from operator import itemgetter
 from pyomo.common.errors import DeveloperError
 from pyomo.solvers.plugins.solvers.gurobi_direct import gurobipy
@@ -2203,6 +2203,7 @@ class _MindtPyAlgorithm(object):
         if self.working_model.component("_int_to_binary_reform") is not None:
             self.working_model._int_to_binary_reform.deactivate()
         # exclude fixed variables here. This is consistent with the definition of variable_list.
+        self.working_model.del_component('baroncuts')
         working_model_variable_list = list(
             get_vars_from_components(
                 block=self.working_model,
@@ -2772,6 +2773,9 @@ class _MindtPyAlgorithm(object):
 
             # Reformulate the objective function.
             self.objective_reformulation()
+            if config.use_baron_convexification:
+                add_baron_cuts(self.working_model)
+                config.logger.info("Use the baron to tighten the bounds of variables and add initial cuts")
 
             # Save model initial values.
             self.initial_var_values = list(v.value for v in MindtPy.variable_list)

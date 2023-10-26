@@ -11,7 +11,8 @@
 
 """Cut generation."""
 from math import copysign
-from pyomo.core import minimize, value
+from pyomo.core import minimize, value, RangeSet, Var, ConstraintList, Objective, Set
+from pyomo.core.base.var import _GeneralVarData
 import pyomo.core.expr as EXPR
 from pyomo.contrib.gdpopt.util import time_code
 from pyomo.contrib.mcpp.pyomo_mcpp import McCormick as mc, MCPP_Error
@@ -503,38 +504,46 @@ def add_baron_cuts(model):
     output_filename, symbol_map = model.baronwrite(
         "root_relaxation_baron.bar", format="bar")
     var_ids = symbol_map.byObject
-    print(var_ids)
+    # dolocal: Local search option for upper bounding. 0: no local search is done during upper bounding. 1: BARON automatically decides when to apply local search based on analyzing the results of previous local searches
     os.system("sed -i '1 a dolocal:0; ' root_relaxation_baron.bar")
+    # NumLoc: Number of local searches done in preprocessing.  If NumLoc is set to −1, local searches in preprocessing will be done until proof of globality or MaxTime is reached. If NumLoc is set to −2, BARON decides the number of local searches in preprocessing based on problem and NLP solver characteristics.
     os.system("sed -i '1 a numloc:0; ' root_relaxation_baron.bar")
     os.system("sed -i '1 a maxtime:10000; ' root_relaxation_baron.bar")
+    # Option to control log output. 0: all log output is suppressed. 1: print log output.
     os.system("sed -i '1 a prlevel:0; ' root_relaxation_baron.bar")
     os.system("sed -i '1 a ppdo:0; ' root_relaxation_baron.bar")
     os.system("sed -i '1 a pscdo:0; ' root_relaxation_baron.bar")
     # os.system('''sed -i '1 a CplexLibName: "/opt/ibm/ILOG/CPLEX_Studio129/cplex/bin/x86-64_linux/libcplex1290.so"; ' root_relaxation_baron.bar''')
-    os.system('''sed -i '1 a CplexLibName: "/package/cplex/22.1/cplex/bin/x86-64_linux/libcplex12100.dylib"; ' root_relaxation_baron.bar''')
-
+    os.system('''sed -i '1 a CplexLibName: "/package/cplex/22.1/cplex/bin/x86-64_linux/libcplex2210.so"; ' root_relaxation_baron.bar''')
     os.system(special_baron_path + " root_relaxation_baron.bar")
-    print('111111')
     cplex_model = cplex.Cplex("relax.lp")
-
     timeb = time.time()
     print("lp file generation time", timeb - timea)
     # create additional variables in the pyomo model
     var_names = cplex_model.variables.get_names()
     num_bar_vars = sum("bar_var" in var for var in var_names)
-    model.bar_set = RangeSet(num_bar_vars)
+    num_bar_vars_list = []
+    # sometimes the index of bar_var is not continuous
+    # Therefore, we cannot use RangeSet
+    for var in var_names:
+        if "bar_var" in var:
+            num_bar_vars_list.append(int(var.split("bar_var")[1]))
+    # model.bar_set = RangeSet(num_bar_vars)
+    model.bar_set = Set(initialize=num_bar_vars_list)
     model.bar_var = Var(model.bar_set)
 
     # create a map from cplex var id to pyomo var name
     varid_to_var = {}
     bar_var_indices = []
+    cplex_var_names = cplex_model.variables.get_names()
     for vid in var_ids:
         name = symbol_map.byObject[vid]
-        var_data = symbol_map.bySymbol[name]()
-        varid_cplex = cplex_model.variables.get_indices(name)
-        varid_to_var[varid_cplex] = var_data
-
-    cplex_var_names = cplex_model.variables.get_names()
+        var_data = symbol_map.bySymbol[name]
+        if isinstance(symbol_map.bySymbol[name], _GeneralVarData):
+            # sometimes some variables only appear in baron file not in cplex
+            if name in cplex_var_names:
+                varid_cplex = cplex_model.variables.get_indices(name)
+                varid_to_var[varid_cplex] = var_data
     for i in range(len(cplex_var_names)):
         varname = cplex_var_names[i]
         if "bar_var" in varname:
@@ -570,15 +579,16 @@ def add_baron_cuts(model):
             if sense == 'E':
                 model.baroncuts.add(expr == rhs)
     # change objective
-    next(model.component_data_objects(Objective, active=True)).deactivate()
+    # move nonlinear objective function to constraint
+    # next(model.component_data_objects(Objective, active=True)).deactivate()
     # model.obj.deactivate()
-    coeff = cplex_model.objective.get_linear()
-    if cplex_model.objective.get_sense() == 1:
-        model.baron_obj = Objective(expr=sum(varid_to_var[i] * coeff[i] for i in range(
-            cplex_model.variables.get_num()) if i in varid_to_var.keys()), sense=minimize)
-    else:
-        model.baron_obj = Objective(expr=sum(varid_to_var[i] * coeff[i] for i in range(
-            cplex_model.variables.get_num()) if i in varid_to_var.keys()), sense=maximize)
+    # coeff = cplex_model.objective.get_linear()
+    # if cplex_model.objective.get_sense() == 1:
+    #     model.baron_obj = Objective(expr=sum(varid_to_var[i] * coeff[i] for i in range(
+    #         cplex_model.variables.get_num()) if i in varid_to_var.keys()), sense=minimize)
+    # else:
+    #     model.baron_obj = Objective(expr=sum(varid_to_var[i] * coeff[i] for i in range(
+    #         cplex_model.variables.get_num()) if i in varid_to_var.keys()), sense=maximize)
 
     timec = time.time()
     print("time to add the cuts to pyomo model", timec-timeb)

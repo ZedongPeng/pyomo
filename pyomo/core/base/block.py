@@ -2046,9 +2046,6 @@ Components must now specify their rules explicitly using 'rule=' keywords."""
                                         solver_capability,
                                         io_options)
         referenced_variable_ids = smap.byObject.keys()
-        print(smap.byObject)
-        print(smap.byObject.keys())
-        print(referenced_variable_ids)
         smap_id = id(smap)
         if not hasattr(self, 'solutions'):
             # This is a bit of a hack.  The write() method was moved

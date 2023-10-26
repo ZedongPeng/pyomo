@@ -502,6 +502,12 @@ def _add_common_configs(CONFIG):
             domain=bool,
         ),
     )
+    CONFIG.declare("use_baron_convexification", ConfigValue(
+        default=False,
+        domain=bool,
+        description="use baron to provide the convex relations for nonconvex MINLPs.",
+        doc="use baron to provide the convex relations for nonconvex MINLPs."
+    ))
 
 
 def _add_subsolver_configs(CONFIG):
