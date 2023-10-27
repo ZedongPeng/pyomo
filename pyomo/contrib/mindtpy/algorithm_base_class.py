@@ -814,6 +814,8 @@ class _MindtPyAlgorithm(object):
         """
         config = self.config
         self.rnlp = self.working_model.clone()
+        if config.use_baron_convexification:
+            self.rnlp.baroncuts.deactivate()
         config.logger.debug('Relaxed NLP: Solve relaxed integrality')
         MindtPy = self.rnlp.MindtPy_utils
         TransformationFactory('core.relax_integer_vars').apply_to(self.rnlp)
@@ -2599,6 +2601,8 @@ class _MindtPyAlgorithm(object):
                 )
 
         self.fixed_nlp = self.working_model.clone()
+        if config.use_baron_convexification:
+            self.fixed_nlp.baroncuts.deactivate()
         TransformationFactory('core.fix_integer_vars').apply_to(self.fixed_nlp)
         initialize_feas_subproblem(self.fixed_nlp, config)
 
