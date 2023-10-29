@@ -707,7 +707,7 @@ class LazyOACallback_cplex(
 
         # Reference: https://www.ibm.com/docs/en/icos/22.1.1?topic=SSSA5P_22.1.1/ilog.odms.cplex.help/refpythoncplex/html/cplex.callbacks.SolutionSource-class.htm
         # Another solution source is user_solution = 118, but it will not be encountered in LazyConstraintCallback.
-        config.logger.info(
+        config.logger.debug(
             "Solution source: {} (111 node_solution, 117 heuristic_solution, 119 mipstart_solution)".format(
                 self.get_solution_source()
             )
