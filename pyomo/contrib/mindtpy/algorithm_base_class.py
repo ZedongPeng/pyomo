@@ -2387,6 +2387,7 @@ class _MindtPyAlgorithm(object):
             fp_nlp.MindtPy_utils.variable_list,
             self.working_model.MindtPy_utils.variable_list,
             self.config,
+            ignore_integrality=True
         )
         add_orthogonality_cuts(self.working_model, self.mip, self.config)
 
