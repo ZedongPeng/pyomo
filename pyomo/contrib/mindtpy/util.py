@@ -1014,87 +1014,8 @@ def customized_initialize(mod):
                 ### update greybox
                 grey_box_name = "ele_"+str(a)+"_"+str(b)
                 mod.my_block.egb.inputs[grey_box_name].value = dynamic_initial_element
-                
-                
-    def _sgn(p):
-        """
-        This is a helper function for stochastic_program function to compute the determinant formula.
-        Give the signature of a permutation
 
-        Parameters
-        -----------
-        p: the permutation (a list)
 
-        Returns
-        -------
-        1 if the number of exchange is an even number
-        -1 if the number is an odd number
-        """
-
-        if len(p) == 1:
-            return 1
-
-        trans = 0
-
-        for i in range(0, len(p)):
-            j = i + 1
-
-            for j in range(j, len(p)):
-                if p[i] > p[j]:
-                    trans = trans + 1
-
-        if (trans % 2) == 0:
-            return 1
-        else:
-            return -1
-    
-    def compute_determinant(m):
-        """Calculate determinant. Can be applied to FIM of any size.
-        det(A) = sum_{\sigma \in \S_n} (sgn(\sigma) * \Prod_{i=1}^n a_{i,\sigma_i})
-        Use permutation() to get permutations, sgn() to get signature
-        """
-        r_list = list(range(4))
-        # get all permutations
-        object_p = permutations(r_list)
-        list_p = list(object_p)
-
-        regression_parameters = [0,1,2,3]
-        
-        # generate a name_order to iterate \sigma_i
-        all_name_order = []
-        for i in range(len(list_p)):
-            name_order = []
-            x_order = list_p[i]
-            # sigma_i is the value in the i-th position after the reordering \sigma
-            for x in range(len(x_order)):
-                for y, element in enumerate(regression_parameters):
-                    if x_order[x] == y:
-                        name_order.append(element)
-            #print(name_order)
-             
-            all_name_order.append(name_order)
-        
-        # det(A) = sum_{\sigma \in \S_n} (sgn(\sigma) * \Prod_{i=1}^n a_{i,\sigma_i})
-        det_perm = 0 
-        
-        for d in range(len(list_p)):
-            #print(all_name_order[d])
-            summi = 1
-            for b, each in enumerate(regression_parameters):
-                if each <= all_name_order[d][b]:
-                    summi *= m.TotalFIM[each, all_name_order[d][b]]
-                else:
-                    summi *= m.TotalFIM[all_name_order[d][b], each]
-                
-            det_perm += _sgn(list_p[d])*summi
-            
-        return det_perm
-        
-    det_init = log(compute_determinant(mod)+0.000001)
-
-    mod.my_block.egb.outputs["log_det"].value = det_init
-        
-                
     # manual and dynamic install initial 
     def total_dynamic_exp(m):
         return sum(m.cov_y[i,i] for i in range(m.n_static_measurements, m.num_measure_dynamic_flatten))
