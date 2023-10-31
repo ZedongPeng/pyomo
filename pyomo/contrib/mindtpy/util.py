@@ -23,7 +23,8 @@ from pyomo.core import (
     RangeSet,
     ConstraintList,
     TransformationFactory,
-    Expression
+    Expression,
+    log
 )
 from pyomo.repn import generate_standard_repn
 from pyomo.contrib.mcpp.pyomo_mcpp import mcpp_available, McCormick
@@ -1088,7 +1089,7 @@ def customized_initialize(mod):
             
         return det_perm
         
-    det_init = pyo.log(compute_determinant(mod)+0.000001)
+    det_init = log(compute_determinant(mod)+0.000001)
 
     mod.my_block.egb.outputs["log_det"].value = det_init
         
