@@ -1009,7 +1009,7 @@ def customized_initialize(mod):
         for b in mod.DimFIM:
             if a<=b:
                 dynamic_initial_element = eval_fim2(mod, a,b)
-                mod.TotalFIM[a,b] = dynamic_initial_element
+                mod.TotalFIM[a,b].value = dynamic_initial_element
                
                 ### update greybox
                 grey_box_name = "ele_"+str(a)+"_"+str(b)
