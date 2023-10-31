@@ -1023,7 +1023,7 @@ class _MindtPyAlgorithm(object):
         )
 
         MindtPy.cuts.deactivate()
-        customized_initialize(self.fixed_nlp)
+        # customized_initialize(self.fixed_nlp)
         if config.calculate_dual_at_solution:
             self.fixed_nlp.tmp_duals = ComponentMap()
             # tmp_duals are the value of the dual variables stored before using deactivate trivial constraints
