@@ -814,8 +814,8 @@ class _MindtPyAlgorithm(object):
         """
         config = self.config
         self.rnlp = self.working_model.clone()
-        if config.use_baron_convexification:
-            self.rnlp.baroncuts.deactivate()
+        # if config.use_baron_convexification:
+        #     self.rnlp.baroncuts.deactivate()
         config.logger.debug('Relaxed NLP: Solve relaxed integrality')
         MindtPy = self.rnlp.MindtPy_utils
         TransformationFactory('core.relax_integer_vars').apply_to(self.rnlp)
@@ -2205,6 +2205,7 @@ class _MindtPyAlgorithm(object):
         if self.working_model.component("_int_to_binary_reform") is not None:
             self.working_model._int_to_binary_reform.deactivate()
         # exclude fixed variables here. This is consistent with the definition of variable_list.
+        # Needed to match the order of variables in variable list.
         self.working_model.del_component('baroncuts')
         working_model_variable_list = list(
             get_vars_from_components(
@@ -2602,8 +2603,8 @@ class _MindtPyAlgorithm(object):
                 )
 
         self.fixed_nlp = self.working_model.clone()
-        if config.use_baron_convexification:
-            self.fixed_nlp.baroncuts.deactivate()
+        # if config.use_baron_convexification:
+        #     self.fixed_nlp.baroncuts.deactivate()
         TransformationFactory('core.fix_integer_vars').apply_to(self.fixed_nlp)
         initialize_feas_subproblem(self.fixed_nlp, config)
 
