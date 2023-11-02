@@ -1015,11 +1015,11 @@ def customized_initialize(mod):
 
                 ### update greybox
                 grey_box_name = "ele_"+str(a)+"_"+str(b)
-                mod.my_block.egb.inputs[grey_box_name].value = dynamic_initial_element
+                #mod.my_block.egb.inputs[grey_box_name].value = dynamic_initial_element
 
     # initialize determinant 
-    _, det = np.linalg.slogdet(new_fim)
-    mod.my_block.egb.outputs["log_det"] = det 
+    #_, det = np.linalg.slogdet(new_fim)
+    #mod.my_block.egb.outputs["log_det"] = det 
     
     # manual and dynamic install initial 
     def total_dynamic_exp(m):
