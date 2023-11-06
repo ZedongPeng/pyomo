@@ -109,7 +109,7 @@ def add_oa_cuts(
                     constr.has_ub()
                     and (
                         linearize_active
-                        and abs(constr.uslack()) < config.zero_tolerance
+                        and abs(constr.uslack()) < config.constraint_tolerance
                     )
                     or (linearize_violated and constr.uslack() < 0)
                     or (config.linearize_inactive and constr.uslack() > 0)
@@ -147,7 +147,7 @@ def add_oa_cuts(
                     constr.has_lb()
                     and (
                         linearize_active
-                        and abs(constr.lslack()) < config.zero_tolerance
+                        and abs(constr.lslack()) < config.constraint_tolerance
                     )
                     or (linearize_violated and constr.lslack() < 0)
                     or (config.linearize_inactive and constr.lslack() > 0)
