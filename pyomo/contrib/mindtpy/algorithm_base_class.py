@@ -16,6 +16,7 @@ import pyomo.core.expr as EXPR
 from pyomo.repn import generate_standard_repn
 import logging
 from pyomo.contrib.fbbt.fbbt import fbbt
+from pyomo.contrib.appsi.fbbt import IntervalTightener
 from pyomo.opt import TerminationCondition as tc
 from pyomo.contrib.mindtpy import __version__
 from pyomo.common.dependencies import attempt_import
@@ -753,7 +754,8 @@ class _MindtPyAlgorithm(object):
             config.use_dual_bound = False
 
         if config.use_fbbt:
-            fbbt(model)
+            IntervalTightener().perform_fbbt(model)
+            # fbbt(model)
             # TODO: logging_level is not logging.INFO here
             config.logger.info('Use the fbbt to tighten the bounds of variables')
 
