@@ -82,6 +82,10 @@ from pyomo.contrib.mindtpy.util import (
     update_solver_timelimit,
     copy_var_list_values,
 )
+from pyomo.contrib import appsi
+from pyomo.contrib import coramin
+
+# coramin, coramin_available = attempt_import('pyomo.contrib.coramin')
 
 single_tree, single_tree_available = attempt_import('pyomo.contrib.mindtpy.single_tree')
 tabu_list, tabu_list_available = attempt_import('pyomo.contrib.mindtpy.tabu_list')
@@ -154,6 +158,7 @@ class _MindtPyAlgorithm(object):
         self.mip_start_lazy_oa_cuts = []
         # Whether to load solutions in solve() function
         self.load_solutions = True
+        self.obbt_performed = False
 
     # Support use as a context manager under current solver API
     def __enter__(self):
@@ -753,14 +758,15 @@ class _MindtPyAlgorithm(object):
             )
             config.use_dual_bound = False
 
+        self.original_model = model
+        self.working_model = model.clone()
+
         if config.use_fbbt:
-            IntervalTightener().perform_fbbt(model)
+            with time_code(self.timing, 'presolve - fbbt'):
+                IntervalTightener().perform_fbbt(self.working_model)
             # fbbt(model)
             # TODO: logging_level is not logging.INFO here
             config.logger.info('Use the fbbt to tighten the bounds of variables')
-
-        self.original_model = model
-        self.working_model = model.clone()
 
         # set up bounds
         if obj.sense == minimize:
@@ -1208,6 +1214,58 @@ class _MindtPyAlgorithm(object):
         if self.primal_bound_improved:
             self.best_solution_found = fixed_nlp.clone()
             self.best_solution_found_time = get_main_elapsed_time(self.timing)
+            if config.use_obbt and not self.obbt_performed:
+                with time_code(self.timing, 'obbt'):
+                    vars_to_tighten = ComponentSet()
+                    vars_to_tighten.update(self.mip.MindtPy_utils.variable_list)
+                    vars_to_tighten.update(self.mip.coramin_relaxation.aux_vars[:])
+                    obbt_opt = appsi.solvers.Gurobi()
+
+                    full_space_lb_vars, full_space_ub_vars = (
+                        coramin.domain_reduction.aggressive_filter(
+                            candidate_variables=vars_to_tighten,
+                            relaxation=self.mip.coramin_relaxation,
+                            solver=obbt_opt,
+                            tolerance=1e-4,
+                            objective_bound=self.primal_bound,
+                        )
+                    )
+                    obbt_opt = appsi.solvers.Gurobi()
+                    elapsed = get_main_elapsed_time(self.timing)
+                    remaining = math.ceil(max(config.time_limit - elapsed, 1))
+                    obbt_opt = appsi.solvers.Gurobi()
+                    new_lbs, new_ubs = coramin.domain_reduction.perform_obbt(
+                        model=self.mip.coramin_relaxation,
+                        solver=obbt_opt,
+                        varlist=full_space_lb_vars,
+                        objective_bound=self.primal_bound,
+                        update_bounds=True,
+                        direction='lbs',
+                        time_limit=remaining,
+                        parallel=False,
+                    )
+                    for var in full_space_lb_vars:
+                        if "coramin_relaxation.aux_vars" not in var.name:
+                            self.fixed_nlp.find_component(var.name).setlb(var.lb)
+
+                    obbt_opt = appsi.solvers.Gurobi()
+                    new_lbs, new_ubs = coramin.domain_reduction.perform_obbt(
+                        model=self.mip.coramin_relaxation,
+                        solver=obbt_opt,
+                        varlist=full_space_ub_vars,
+                        objective_bound=self.primal_bound,
+                        update_bounds=True,
+                        direction='ubs',
+                        time_limit=remaining,
+                        parallel=False,
+                    )
+                    for var in full_space_ub_vars:
+                        if (
+                            "coramin_relaxation.aux_vars" not in var.name
+                        ) and not var.is_integer():
+                            self.fixed_nlp.find_component(var.name).setub(var.ub)
+                self.obbt_performed = True
+
         # Add the linear cut
         copy_var_list_values(
             fixed_nlp.MindtPy_utils.variable_list,
@@ -1665,6 +1723,7 @@ class _MindtPyAlgorithm(object):
         update_solver_timelimit(self.mip_opt, config.mip_solver, self.timing, config)
 
         try:
+            self.mip.coramin_relaxation.relaxations.rel2.pprint(verbose=True)
             main_mip_results = self.mip_opt.solve(
                 self.mip,
                 tee=config.mip_solver_tee,
@@ -1868,12 +1927,19 @@ class _MindtPyAlgorithm(object):
         )
 
         if update_bound:
-            self.update_dual_bound(value(MindtPy.mip_obj.expr))
+            mip_obj = next(
+                self.mip.component_data_objects(
+                    ctype=Objective, active=True, descend_into=(Block)
+                )
+            )
+            self.update_dual_bound(value(mip_obj.expr))
+            # self.update_dual_bound(value(MindtPy.mip_obj.expr))
             self.config.logger.info(
                 self.log_formatter.format(
                     self.mip_iter,
                     'MILP',
-                    value(MindtPy.mip_obj.expr),
+                    value(mip_obj.expr),
+                    # value(MindtPy.mip_obj.expr),
                     self.primal_bound,
                     self.dual_bound,
                     self.rel_gap,
@@ -2063,14 +2129,17 @@ class _MindtPyAlgorithm(object):
         config = self.config
         MindtPy = self.mip.MindtPy_utils
 
+        # TODO: this can be moved to creating the MIP model.
         for c in MindtPy.constraint_list:
+            # if config.use_obbt:
+            #     c.deactivate()
             if c.body.polynomial_degree() not in self.mip_constraint_polynomial_degree:
                 c.deactivate()
 
         MindtPy.cuts.activate()
 
         sign_adjust = 1 if self.objective_sense == minimize else -1
-        MindtPy.del_component('mip_obj')
+
         if config.add_regularization is not None and config.add_no_good_cuts:
             MindtPy.cuts.no_good_cuts.deactivate()
 
@@ -2083,11 +2152,13 @@ class _MindtPyAlgorithm(object):
                 * sum(v for v in MindtPy.cuts.slack_vars.values())
             )
         main_objective = MindtPy.objective_list[-1]
-        MindtPy.mip_obj = Objective(
-            expr=main_objective.expr
-            + (MindtPy.aug_penalty_expr if config.add_slack else 0),
-            sense=self.objective_sense,
-        )
+        if not config.use_obbt:
+            MindtPy.del_component('mip_obj')
+            MindtPy.mip_obj = Objective(
+                expr=main_objective.expr
+                + (MindtPy.aug_penalty_expr if config.add_slack else 0),
+                sense=self.objective_sense,
+            )
 
         if config.use_dual_bound:
             # Delete previously added dual bound constraint
@@ -2606,6 +2677,48 @@ class _MindtPyAlgorithm(object):
             add_var_bound(self.working_model, config)
 
         self.mip = self.working_model.clone()
+
+        # OBBT
+        if config.use_obbt:
+            with time_code(self.timing, 'presolve - convex relaxation'):
+                self.mip.coramin_relaxation = coramin.relaxations.relax(self.mip)
+                # TODO: only needed for avm cuts
+                # for rel in coramin.relaxations.relaxation_data_objects(
+                #     self.mip.coramin_relaxation
+                # ):
+                #     if rel.relaxation_side == RelaxationSide.BOTH:
+                #         rel._original_constraint = Constraint(
+                #             expr=rel.get_aux_var() == rel.get_rhs_expr()
+                #         )
+                #     elif rel.relaxation_side == RelaxationSide.UNDER:
+                #         rel._original_constraint = Constraint(
+                #             expr=rel.get_aux_var() >= rel.get_rhs_expr()
+                #         )
+                #     else:
+                #         rel._original_constraint = Constraint(
+                #             expr=rel.get_aux_var() <= rel.get_rhs_expr()
+                #         )
+                #     rel._original_constraint.deactivate()
+
+        # TODO: if we use avm cuts for MIP master. We should also apply avm to fixed NLP. Otherwise, the auxiliary variables has no values.
+        # if config.use_avm_cuts:
+        #     # self.mip.MindtPy_utils.constraint_list = []
+        #     self.mip.MindtPy_utils.linear_constraint_list = [
+        #         c for c in self.mip.coramin_relaxation.linear.cons[:]
+        #     ]
+        #     print(self.mip.MindtPy_utils.linear_constraint_list)
+        #     self.mip.MindtPy_utils.nonlinear_constraint_list = [
+        #         rel._original_constraint
+        #         for rel in coramin.relaxations.relaxation_data_objects(
+        #             self.mip.coramin_relaxation
+        #         )
+        #     ]
+        #     print(self.mip.MindtPy_utils.nonlinear_constraint_list)
+        #     self.mip.MindtPy_utils.constraint_list = (
+        #         self.mip.MindtPy_utils.linear_constraint_list
+        #         + self.mip.MindtPy_utils.nonlinear_constraint_list
+        #     )
+
         next(self.mip.component_data_objects(Objective, active=True)).deactivate()
         if hasattr(self.mip, 'dual') and isinstance(self.mip.dual, Suffix):
             self.mip.del_component('dual')
@@ -2778,14 +2891,14 @@ class _MindtPyAlgorithm(object):
         new_logging_level = logging.INFO if config.tee else None
         with lower_logger_level_to(config.logger, new_logging_level):
             self.check_config()
-
+        # TODO: fbbt applied here, might be able to move behind
         self.set_up_solve_data(model)
 
         if config.integer_to_binary:
             TransformationFactory('contrib.integer_to_binary').apply_to(
                 self.working_model
             )
-
+        # constraint_list built here
         self.create_utility_block(self.working_model, 'MindtPy_utils')
         with time_code(self.timing, 'total', is_main_timer=True), lower_logger_level_to(
             config.logger, new_logging_level

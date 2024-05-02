@@ -3,6 +3,18 @@ from pyomo.core.expr.visitor import identify_variables
 from pyomo.common.collections import ComponentSet
 import enum
 import pyomo.environ as pe
+from pyomo.core import (
+    minimize,
+    maximize,
+    ComponentMap,
+    ConcreteModel,
+    Var,
+    Objective,
+    Reference,
+    Constraint,
+    value,
+)
+from pyomo.opt.base import SolverFactory
 from pyomo.core.expr.numvalue import is_fixed
 import math
 from pyomo.contrib.fbbt.fbbt import compute_bounds_on_expr
@@ -56,9 +68,7 @@ class Hessian(object):
         self._constant_hessian_max_eig = None
         self._expr = expr
         self._var_list = list(identify_variables(expr=expr, include_fixed=False))
-        self._ndx_map = pe.ComponentMap(
-            (v, ndx) for ndx, v in enumerate(self._var_list)
-        )
+        self._ndx_map = ComponentMap((v, ndx) for ndx, v in enumerate(self._var_list))
         self._hessian = self.compute_symbolic_hessian()
         self._eigenvalue_problem: Optional[_BlockData] = None
         self._eigenvalue_relaxation: Optional[_BlockData] = None
@@ -69,7 +79,7 @@ class Hessian(object):
     def variables(self):
         return tuple(self._var_list)
 
-    def formulate_eigenvalue_problem(self, sense=pe.minimize):
+    def formulate_eigenvalue_problem(self, sense=minimize):
         if self._eigenvalue_problem is not None:
             min_eig, max_eig = self.bound_eigenvalues_from_interval_hessian()
             if min_eig > self._eigenvalue_problem.eig.lb:
@@ -79,11 +89,11 @@ class Hessian(object):
             self._eigenvalue_problem.obj.sense = sense
             return self._eigenvalue_problem
         min_eig, max_eig = self.bound_eigenvalues_from_interval_hessian()
-        m = pe.ConcreteModel()
-        m.eig = pe.Var(bounds=(min_eig, max_eig))
-        m.obj = pe.Objective(expr=m.eig, sense=sense)
+        m = ConcreteModel()
+        m.eig = Var(bounds=(min_eig, max_eig))
+        m.obj = Objective(expr=m.eig, sense=sense)
         for v in self._var_list:
-            m.add_component(v.name, pe.Reference(v))
+            m.add_component(v.name, Reference(v))
 
         n = len(self._var_list)
         np_hess = np.empty((n, n), dtype=object)
@@ -99,11 +109,11 @@ class Hessian(object):
                     np_hess[ndx1, ndx2] -= m.eig
                 else:
                     np_hess[ndx2, ndx1] = np_hess[ndx1, ndx2]
-        m.det_con = pe.Constraint(expr=_determinant(np_hess) == 0)
+        m.det_con = Constraint(expr=_determinant(np_hess) == 0)
         self._eigenvalue_problem = m
         return m
 
-    def formulate_eigenvalue_relaxation(self, sense=pe.minimize):
+    def formulate_eigenvalue_relaxation(self, sense=minimize):
         if self._eigenvalue_relaxation is not None:
             for orig_v, rel_v in self._orig_to_relaxation_vars.items():
                 orig_lb, orig_ub = orig_v.bounds
@@ -123,9 +133,7 @@ class Hessian(object):
             self._eigenvalue_relaxation.obj.sense = sense
             return self._eigenvalue_relaxation
         m = self.formulate_eigenvalue_problem(sense=sense)
-        all_vars = list(
-            ComponentSet(m.component_data_objects(pe.Var, descend_into=True))
-        )
+        all_vars = list(ComponentSet(m.component_data_objects(Var, descend_into=True)))
         from .auto_relax import relax
 
         relaxation = relax(m)
@@ -168,10 +176,10 @@ class Hessian(object):
         elif self.method <= EigenValueBounder.GershgorinWithSimplification:
             res = self.bound_eigenvalues_from_interval_hessian()[1]
         elif self.method == EigenValueBounder.LinearProgram:
-            m = self.formulate_eigenvalue_relaxation(sense=pe.maximize)
+            m = self.formulate_eigenvalue_relaxation(sense=maximize)
             res = self.opt.solve(m).best_objective_bound
         else:
-            m = self.formulate_eigenvalue_problem(sense=pe.maximize)
+            m = self.formulate_eigenvalue_problem(sense=maximize)
             res = self.opt.solve(m).best_objective_bound
         return res
 
@@ -198,13 +206,13 @@ class Hessian(object):
 
     def compute_symbolic_hessian(self):
         ders = reverse_sd(self._expr)
-        ders2 = pe.ComponentMap()
+        ders2 = ComponentMap()
         for v in self._var_list:
             ders2[v] = reverse_sd(ders[v])
 
-        res = pe.ComponentMap()
+        res = ComponentMap()
         for v in self._var_list:
-            res[v] = pe.ComponentMap()
+            res[v] = ComponentMap()
 
         n = len(self._var_list)
         for v1 in self._var_list:
@@ -215,7 +223,7 @@ class Hessian(object):
                     continue
                 der = ders2[v1][v2]
                 if is_fixed(der):
-                    val = pe.value(der)
+                    val = value(der)
                     res[v1][v2] = val
                 else:
                     if self.method >= EigenValueBounder.GershgorinWithSimplification:
@@ -229,16 +237,16 @@ class Hessian(object):
         for v1, dd in res.items():
             for v2, d2 in dd.items():
                 if is_fixed(d2):
-                    res[v1][v2] = pe.value(d2)
+                    res[v1][v2] = value(d2)
                 else:
                     self._constant_hessian = False
 
         return res
 
     def compute_interval_hessian(self):
-        res = pe.ComponentMap()
+        res = ComponentMap()
         for v in self._var_list:
-            res[v] = pe.ComponentMap()
+            res[v] = ComponentMap()
 
         n = len(self._var_list)
         for ndx1, v1 in enumerate(self._var_list):

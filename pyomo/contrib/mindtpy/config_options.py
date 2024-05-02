@@ -457,11 +457,25 @@ def _add_common_configs(CONFIG):
     CONFIG.declare(
         'use_fbbt',
         ConfigValue(
-            default=False,
+            default=True,
             description='Use fbbt to tighten the feasible region of the problem.',
             domain=bool,
         ),
     )
+    CONFIG.declare(
+        'use_obbt',
+        ConfigValue(
+            default=True,
+            description='Use obbt to tighten the feasible region of the problem.',
+            domain=bool,
+        ),
+    )
+    # CONFIG.declare(
+    #     'use_avm_cuts',
+    #     ConfigValue(
+    #         default=True, description='Use AVM to generate the OA cuts.', domain=bool
+    #     ),
+    # )
     CONFIG.declare(
         'use_dual_bound',
         ConfigValue(
