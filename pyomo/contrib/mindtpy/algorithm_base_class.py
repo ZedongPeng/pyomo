@@ -1235,7 +1235,10 @@ class _MindtPyAlgorithm(object):
                     remaining = math.ceil(max(config.time_limit - elapsed, 1))
                     obbt_opt = appsi.solvers.Gurobi()
                     new_lbs, new_ubs = coramin.domain_reduction.perform_obbt(
-                        model=self.mip.coramin_relaxation,
+                        # model=self.mip.coramin_relaxation,
+                        # We use self.mip instead of self.mip.coramin_relaxation here
+                        # since we want to include the OA cuts generated before the first feasible solution is found.
+                        model=self.mip,
                         solver=obbt_opt,
                         varlist=full_space_lb_vars,
                         objective_bound=self.primal_bound,
@@ -1250,7 +1253,8 @@ class _MindtPyAlgorithm(object):
 
                     obbt_opt = appsi.solvers.Gurobi()
                     new_lbs, new_ubs = coramin.domain_reduction.perform_obbt(
-                        model=self.mip.coramin_relaxation,
+                        # model=self.mip.coramin_relaxation,
+                        model=self.mip,
                         solver=obbt_opt,
                         varlist=full_space_ub_vars,
                         objective_bound=self.primal_bound,
