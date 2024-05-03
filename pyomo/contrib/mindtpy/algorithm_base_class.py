@@ -1727,7 +1727,6 @@ class _MindtPyAlgorithm(object):
         update_solver_timelimit(self.mip_opt, config.mip_solver, self.timing, config)
 
         try:
-            self.mip.coramin_relaxation.relaxations.rel2.pprint(verbose=True)
             main_mip_results = self.mip_opt.solve(
                 self.mip,
                 tee=config.mip_solver_tee,
