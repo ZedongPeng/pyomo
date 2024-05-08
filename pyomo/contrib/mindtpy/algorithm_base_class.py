@@ -2155,7 +2155,7 @@ class _MindtPyAlgorithm(object):
                 * sum(v for v in MindtPy.cuts.slack_vars.values())
             )
         main_objective = MindtPy.objective_list[-1]
-        if not config.use_obbt:
+        if not config.use_convex_relaxation:
             MindtPy.del_component('mip_obj')
             MindtPy.mip_obj = Objective(
                 expr=main_objective.expr
@@ -2401,6 +2401,15 @@ class _MindtPyAlgorithm(object):
             )
         ):
             self.load_solutions = False
+
+        if config.use_obbt:
+            config.use_convex_relaxation = True
+
+        if config.add_slack and config.use_convex_relaxation:
+            raise NotImplementedError(
+                "In current implementation, use_convex_relaxation "
+                "and add_slack cannot be activated at the same time."
+            )
 
     ################################################################################################################################
     # Feasibility Pump
@@ -2681,10 +2690,18 @@ class _MindtPyAlgorithm(object):
 
         self.mip = self.working_model.clone()
 
-        # OBBT
-        if config.use_obbt:
+        # Convex relaxation
+        if config.use_convex_relaxation:
             with time_code(self.timing, 'presolve - convex relaxation'):
                 self.mip.coramin_relaxation = coramin.relaxations.relax(self.mip)
+                # If the variable is fixed or have lower bounds equal to their upper bounds, Coramin recognizes that this type of constraint is linear under those conditions and will just return the original constraint.
+                # MindtPy need to manually deactivate the original constraint.
+                for rel in coramin.relaxations.relaxation_data_objects(
+                    self.mip.coramin_relaxation
+                ):
+                    if rel.component("_original_constraint") is not None:
+                        rel._original_constraint.deactivate()
+
                 # TODO: only needed for avm cuts
                 # for rel in coramin.relaxations.relaxation_data_objects(
                 #     self.mip.coramin_relaxation

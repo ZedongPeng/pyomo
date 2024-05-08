@@ -463,9 +463,17 @@ def _add_common_configs(CONFIG):
         ),
     )
     CONFIG.declare(
+        'use_convex_relaxation',
+        ConfigValue(
+            default=False,
+            description='Use convex relaxation to tighten the feasible region of the problem.',
+            domain=bool,
+        ),
+    )
+    CONFIG.declare(
         'use_obbt',
         ConfigValue(
-            default=True,
+            default=False,
             description='Use obbt to tighten the feasible region of the problem.',
             domain=bool,
         ),

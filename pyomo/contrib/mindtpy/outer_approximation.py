@@ -91,7 +91,7 @@ class MindtPy_OA_Solver(_MindtPyAlgorithm):
                 'sqp_lag',
             }:
                 self.regularization_mip_type = 'MIQP'
-        _MindtPyAlgorithm.check_config(self)
+        super().check_config()
 
     def initialize_mip_problem(self):
         """Deactivate the nonlinear constraints to create the MIP problem."""
