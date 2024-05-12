@@ -647,6 +647,14 @@ def _add_subsolver_configs(CONFIG):
             doc='Which MIP subsolver is going to be used for solving the regularization problem.',
         ),
     )
+    CONFIG.declare(
+        'warm_start_fixed_nlp',
+        ConfigValue(
+            default=True,
+            description='whether to warm start the fixed NLP subproblem.',
+            domain=bool,
+        ),
+    )
 
 
 def _add_tolerance_configs(CONFIG):

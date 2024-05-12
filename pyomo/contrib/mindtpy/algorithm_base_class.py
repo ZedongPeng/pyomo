@@ -2663,7 +2663,10 @@ class _MindtPyAlgorithm(object):
         set_solver_mipgap(self.mip_opt, config.mip_solver, config)
 
         set_solver_constraint_violation_tolerance(
-            self.nlp_opt, config.nlp_solver, config
+            self.nlp_opt,
+            config.nlp_solver,
+            config,
+            warm_start=config.warm_start_fixed_nlp,
         )
         set_solver_constraint_violation_tolerance(
             self.feasibility_nlp_opt, config.nlp_solver, config, warm_start=False
