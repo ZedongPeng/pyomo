@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -17,14 +17,8 @@ import operator
 
 logger = logging.getLogger('pyomo.core')
 
-from math import isclose
-
-from pyomo.common.dependencies import numpy as np, numpy_available
-from pyomo.common.deprecation import (
-    deprecated,
-    deprecation_warning,
-    relocated_module_attribute,
-)
+from pyomo.common.dependencies import attempt_import
+from pyomo.common.deprecation import deprecated, relocated_module_attribute
 from pyomo.common.errors import PyomoException, DeveloperError
 from pyomo.common.formatting import tostr
 from pyomo.common.numeric_types import (
@@ -46,6 +40,9 @@ from pyomo.core.expr.expr_common import (
 
 # Note: pyggyback on expr.base's use of attempt_import(visitor)
 from pyomo.core.expr.base import ExpressionBase, NPV_Mixin, visitor
+
+
+_ndarray, _ = attempt_import('pyomo.core.expr.ndarray')
 
 relocated_module_attribute(
     'is_potentially_variable',
@@ -634,7 +631,9 @@ explicitly resolving the numeric value using the Pyomo value() function.
         return _abs_dispatcher[self.__class__](self)
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
-        return NumericNDArray.__array_ufunc__(None, ufunc, method, *inputs, **kwargs)
+        return _ndarray.NumericNDArray.__array_ufunc__(
+            None, ufunc, method, *inputs, **kwargs
+        )
 
     def to_string(self, verbose=None, labeler=None, smap=None, compute_values=False):
         """Return a string representation of the expression tree.
@@ -669,35 +668,6 @@ explicitly resolving the numeric value using the Pyomo value() function.
             elif labeler is not None:
                 return labeler(self)
         return str(self)
-
-
-#
-# Note: the "if numpy_available" in the class definition also ensures
-# that the numpy types are registered if numpy is in fact available
-#
-# TODO: Move this to a separate module to support avoiding the numpy
-# import if numpy is not actually used.
-class NumericNDArray(np.ndarray if numpy_available else object):
-    """An ndarray subclass that stores Pyomo numeric expressions"""
-
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
-        if method == '__call__':
-            # Convert all incoming types to ndarray (to prevent recursion)
-            args = [np.asarray(i) for i in inputs]
-            # Set the return type to be an 'object'.  This prevents the
-            # logical operators from casting the result to a bool.  This
-            # requires numpy >= 1.6
-            kwargs['dtype'] = object
-
-        # Delegate to the base ufunc, but return an instance of this
-        # class so that additional operators hit this method.
-        ans = getattr(ufunc, method)(*args, **kwargs)
-        if isinstance(ans, np.ndarray):
-            if ans.size == 1:
-                return ans[0]
-            return ans.view(NumericNDArray)
-        else:
-            return ans
 
 
 # -------------------------------------------------------
@@ -752,7 +722,7 @@ class NumericExpression(ExpressionBase, NumericValue):
     @deprecated(
         'The implicit recasting of a "not potentially variable" '
         'expression node to a potentially variable one is no '
-        'longer supported (this violates that immutability '
+        'longer supported (this violates the immutability '
         'promise for Pyomo5 expression trees).',
         version='6.4.3',
     )
@@ -1186,12 +1156,29 @@ class SumExpression(NumericExpression):
 
     @property
     def args(self):
-        if len(self._args_) != self._nargs:
-            self._args_ = self._args_[: self._nargs]
-        return self._args_
+        # We unconditionally make a copy of the args to isolate the user
+        # from future possible updates to the underlying list
+        return self._args_[: self._nargs]
 
     def getname(self, *args, **kwds):
         return 'sum'
+
+    def _trunc_append(self, other):
+        _args = self._args_
+        if len(_args) > self._nargs:
+            _args = _args[: self._nargs]
+        _args.append(other)
+        return self.__class__(_args)
+
+    def _trunc_extend(self, other):
+        _args = self._args_
+        if len(_args) > self._nargs:
+            _args = _args[: self._nargs]
+        if len(other._args_) == other._nargs:
+            _args.extend(other._args_)
+        else:
+            _args.extend(other._args_[: other._nargs])
+        return self.__class__(_args)
 
     def _apply_operation(self, result):
         return sum(result)
@@ -1247,9 +1234,11 @@ class LinearExpression(SumExpression):
     """An expression object for linear polynomials.
 
     This is a derived :py:class`SumExpression` that guarantees all
-    arguments are either not potentially variable (e.g., native types,
-    Params, or NPV expressions) OR :py:class:`MonomialTermExpression`
-    objects.
+    arguments are one of the following types:
+
+      - not potentially variable (e.g., native types, Params, or NPV expressions)
+      - :py:class:`MonomialTermExpression`
+      - :py:class:`VarData`
 
     Args:
         args (tuple): Children nodes
@@ -1266,7 +1255,7 @@ class LinearExpression(SumExpression):
 
         You can specify `args` OR (`constant`, `linear_coefs`, and
         `linear_vars`).  If `args` is provided, it should be a list that
-        contains only constants, NPV objects/expressions, or
+        contains only constants, NPV objects/expressions, variables, or
         :py:class:`MonomialTermExpression` objects.  Alternatively, you
         can specify the constant, the list of linear_coefs and the list
         of linear_vars separately.  Note that these lists are NOT
@@ -1311,8 +1300,14 @@ class LinearExpression(SumExpression):
             if arg.__class__ is MonomialTermExpression:
                 coef.append(arg._args_[0])
                 var.append(arg._args_[1])
-            else:
+            elif arg.__class__ in native_numeric_types:
                 const += arg
+            elif not arg.is_potentially_variable():
+                const += arg
+            else:
+                assert arg.is_potentially_variable()
+                coef.append(1)
+                var.append(arg)
         LinearExpression._cache = (self, const, coef, var)
 
     @property
@@ -1338,7 +1333,7 @@ class LinearExpression(SumExpression):
             classtype = self.__class__
         if type(args) is not list:
             args = list(args)
-        for i, arg in enumerate(args):
+        for arg in args:
             if arg.__class__ in self._allowable_linear_expr_arg_types:
                 # 99% of the time, the arg type hasn't changed
                 continue
@@ -1349,8 +1344,7 @@ class LinearExpression(SumExpression):
                 # NPV expressions are OK
                 pass
             elif arg.is_variable_type():
-                # vars are OK, but need to be mapped to monomial terms
-                args[i] = MonomialTermExpression((1, arg))
+                # vars are OK
                 continue
             else:
                 # For anything else, convert this to a general sum
@@ -1833,7 +1827,7 @@ def _add_native_param(a, b):
 def _add_native_var(a, b):
     if not a:
         return b
-    return LinearExpression([a, MonomialTermExpression((1, b))])
+    return LinearExpression([a, b])
 
 
 def _add_native_monomial(a, b):
@@ -1845,17 +1839,13 @@ def _add_native_monomial(a, b):
 def _add_native_linear(a, b):
     if not a:
         return b
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_native_sum(a, b):
     if not a:
         return b
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_native_other(a, b):
@@ -1888,7 +1878,7 @@ def _add_npv_param(a, b):
 
 
 def _add_npv_var(a, b):
-    return LinearExpression([a, MonomialTermExpression((1, b))])
+    return LinearExpression([a, b])
 
 
 def _add_npv_monomial(a, b):
@@ -1896,15 +1886,11 @@ def _add_npv_monomial(a, b):
 
 
 def _add_npv_linear(a, b):
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_npv_sum(a, b):
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_npv_other(a, b):
@@ -1950,7 +1936,7 @@ def _add_param_var(a, b):
         a = a.value
         if not a:
             return b
-    return LinearExpression([a, MonomialTermExpression((1, b))])
+    return LinearExpression([a, b])
 
 
 def _add_param_monomial(a, b):
@@ -1966,9 +1952,7 @@ def _add_param_linear(a, b):
         a = a.value
         if not a:
             return b
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_param_sum(a, b):
@@ -1976,9 +1960,7 @@ def _add_param_sum(a, b):
         a = value(a)
         if not a:
             return b
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_param_other(a, b):
@@ -1997,11 +1979,11 @@ def _add_param_other(a, b):
 def _add_var_native(a, b):
     if not b:
         return a
-    return LinearExpression([MonomialTermExpression((1, a)), b])
+    return LinearExpression([a, b])
 
 
 def _add_var_npv(a, b):
-    return LinearExpression([MonomialTermExpression((1, a)), b])
+    return LinearExpression([a, b])
 
 
 def _add_var_param(a, b):
@@ -2009,29 +1991,23 @@ def _add_var_param(a, b):
         b = b.value
         if not b:
             return a
-    return LinearExpression([MonomialTermExpression((1, a)), b])
+    return LinearExpression([a, b])
 
 
 def _add_var_var(a, b):
-    return LinearExpression(
-        [MonomialTermExpression((1, a)), MonomialTermExpression((1, b))]
-    )
+    return LinearExpression([a, b])
 
 
 def _add_var_monomial(a, b):
-    return LinearExpression([MonomialTermExpression((1, a)), b])
+    return LinearExpression([a, b])
 
 
 def _add_var_linear(a, b):
-    args = b.args
-    args.append(MonomialTermExpression((1, a)))
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_var_sum(a, b):
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_var_other(a, b):
@@ -2062,7 +2038,7 @@ def _add_monomial_param(a, b):
 
 
 def _add_monomial_var(a, b):
-    return LinearExpression([a, MonomialTermExpression((1, b))])
+    return LinearExpression([a, b])
 
 
 def _add_monomial_monomial(a, b):
@@ -2070,15 +2046,11 @@ def _add_monomial_monomial(a, b):
 
 
 def _add_monomial_linear(a, b):
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_monomial_sum(a, b):
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_monomial_other(a, b):
@@ -2093,15 +2065,11 @@ def _add_monomial_other(a, b):
 def _add_linear_native(a, b):
     if not b:
         return a
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_linear_npv(a, b):
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_linear_param(a, b):
@@ -2109,33 +2077,23 @@ def _add_linear_param(a, b):
         b = b.value
         if not b:
             return a
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_linear_var(a, b):
-    args = a.args
-    args.append(MonomialTermExpression((1, b)))
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_linear_monomial(a, b):
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_linear_linear(a, b):
-    args = a.args
-    args.extend(b.args)
-    return a.__class__(args)
+    return a._trunc_extend(b)
 
 
 def _add_linear_sum(a, b):
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_linear_other(a, b):
@@ -2150,15 +2108,11 @@ def _add_linear_other(a, b):
 def _add_sum_native(a, b):
     if not b:
         return a
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_sum_npv(a, b):
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_sum_param(a, b):
@@ -2166,39 +2120,27 @@ def _add_sum_param(a, b):
         b = b.value
         if not b:
             return a
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_sum_var(a, b):
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_sum_monomial(a, b):
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_sum_linear(a, b):
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 def _add_sum_sum(a, b):
-    args = a.args
-    args.extend(b.args)
-    return a.__class__(args)
+    return a._trunc_extend(b)
 
 
 def _add_sum_other(a, b):
-    args = a.args
-    args.append(b)
-    return a.__class__(args)
+    return a._trunc_append(b)
 
 
 #
@@ -2237,9 +2179,7 @@ def _add_other_linear(a, b):
 
 
 def _add_other_sum(a, b):
-    args = b.args
-    args.append(a)
-    return b.__class__(args)
+    return b._trunc_append(a)
 
 
 def _add_other_other(a, b):
@@ -2348,8 +2288,11 @@ def _iadd_mutablenpvsum_mutable(a, b):
 def _iadd_mutablenpvsum_native(a, b):
     if not b:
         return a
-    a._args_.append(b)
-    a._nargs += 1
+    if a._args_ and a._args_[-1].__class__ in native_numeric_types:
+        a._args_[-1] += b
+    else:
+        a._args_.append(b)
+        a._nargs += 1
     return a
 
 
@@ -2361,9 +2304,7 @@ def _iadd_mutablenpvsum_npv(a, b):
 
 def _iadd_mutablenpvsum_param(a, b):
     if b.is_constant():
-        b = b.value
-        if not b:
-            return a
+        return _iadd_mutablesum_native(a, b.value)
     a._args_.append(b)
     a._nargs += 1
     return a
@@ -2414,9 +2355,9 @@ def _register_new_iadd_mutablenpvsum_handler(a, b):
     # Retrieve the appropriate handler, record it in the main
     # _iadd_mutablenpvsum_dispatcher dict (so this method is not called a second time for
     # these types)
-    _iadd_mutablenpvsum_dispatcher[
-        b.__class__
-    ] = handler = _iadd_mutablenpvsum_type_handler_mapping[types[0]]
+    _iadd_mutablenpvsum_dispatcher[b.__class__] = handler = (
+        _iadd_mutablenpvsum_type_handler_mapping[types[0]]
+    )
     # Call the appropriate handler
     return handler(a, b)
 
@@ -2444,8 +2385,11 @@ def _iadd_mutablelinear_mutable(a, b):
 def _iadd_mutablelinear_native(a, b):
     if not b:
         return a
-    a._args_.append(b)
-    a._nargs += 1
+    if a._args_ and a._args_[-1].__class__ in native_numeric_types:
+        a._args_[-1] += b
+    else:
+        a._args_.append(b)
+        a._nargs += 1
     return a
 
 
@@ -2457,16 +2401,14 @@ def _iadd_mutablelinear_npv(a, b):
 
 def _iadd_mutablelinear_param(a, b):
     if b.is_constant():
-        b = b.value
-        if not b:
-            return a
+        return _iadd_mutablesum_native(a, b.value)
     a._args_.append(b)
     a._nargs += 1
     return a
 
 
 def _iadd_mutablelinear_var(a, b):
-    a._args_.append(MonomialTermExpression((1, b)))
+    a._args_.append(b)
     a._nargs += 1
     return a
 
@@ -2513,9 +2455,9 @@ def _register_new_iadd_mutablelinear_handler(a, b):
     # Retrieve the appropriate handler, record it in the main
     # _iadd_mutablelinear_dispatcher dict (so this method is not called a second time for
     # these types)
-    _iadd_mutablelinear_dispatcher[
-        b.__class__
-    ] = handler = _iadd_mutablelinear_type_handler_mapping[types[0]]
+    _iadd_mutablelinear_dispatcher[b.__class__] = handler = (
+        _iadd_mutablelinear_type_handler_mapping[types[0]]
+    )
     # Call the appropriate handler
     return handler(a, b)
 
@@ -2543,8 +2485,11 @@ def _iadd_mutablesum_mutable(a, b):
 def _iadd_mutablesum_native(a, b):
     if not b:
         return a
-    a._args_.append(b)
-    a._nargs += 1
+    if a._args_ and a._args_[-1].__class__ in native_numeric_types:
+        a._args_[-1] += b
+    else:
+        a._args_.append(b)
+        a._nargs += 1
     return a
 
 
@@ -2556,9 +2501,7 @@ def _iadd_mutablesum_npv(a, b):
 
 def _iadd_mutablesum_param(a, b):
     if b.is_constant():
-        b = b.value
-        if not b:
-            return a
+        return _iadd_mutablesum_native(a, b.value)
     a._args_.append(b)
     a._nargs += 1
     return a
@@ -2614,9 +2557,9 @@ def _register_new_iadd_mutablesum_handler(a, b):
     # Retrieve the appropriate handler, record it in the main
     # _iadd_mutablesum_dispatcher dict (so this method is not called a
     # second time for these types)
-    _iadd_mutablesum_dispatcher[
-        b.__class__
-    ] = handler = _iadd_mutablesum_type_handler_mapping[types[0]]
+    _iadd_mutablesum_dispatcher[b.__class__] = handler = (
+        _iadd_mutablesum_type_handler_mapping[types[0]]
+    )
     # Call the appropriate handler
     return handler(a, b)
 
@@ -2652,8 +2595,8 @@ def _neg_var(a):
 
 
 def _neg_monomial(a):
-    args = a.args
-    return MonomialTermExpression((-args[0], args[1]))
+    coef, var = a.args
+    return MonomialTermExpression((-coef, var))
 
 
 def _neg_sum(a):

@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -23,13 +23,12 @@ from pyomo.core import (
     RangeSet,
     ConstraintList,
     TransformationFactory,
-    value
+    value,
 )
 from pyomo.repn import generate_standard_repn
 from pyomo.contrib.mcpp.pyomo_mcpp import mcpp_available, McCormick
 from pyomo.contrib.fbbt.fbbt import compute_bounds_on_expr
 import pyomo.core.expr as EXPR
-from pyomo.opt import ProblemSense
 from pyomo.contrib.gdpopt.util import get_main_elapsed_time, time_code
 from pyomo.util.model_size import build_model_size_report
 from pyomo.common.dependencies import attempt_import
@@ -41,27 +40,24 @@ pyomo_nlp = attempt_import('pyomo.contrib.pynumero.interfaces.pyomo_nlp')[0]
 numpy = attempt_import('numpy')[0]
 
 
-def calc_jacobians(model, config):
+def calc_jacobians(constraint_list, differentiate_mode):
     """Generates a map of jacobians for the variables in the model.
 
     This function generates a map of jacobians corresponding to the variables in the
-    model.
+    constraint list.
 
     Parameters
     ----------
-    model : Pyomo model
-        Target model to calculate jacobian.
-    config : ConfigBlock
-        The specific configurations for MindtPy.
+    constraint_list : List
+        The list of constraints to calculate Jacobians.
+    differentiate_mode : String
+        The differentiate mode to calculate Jacobians.
     """
     # Map nonlinear_constraint --> Map(
     #     variable --> jacobian of constraint w.r.t. variable)
     jacobians = ComponentMap()
-    if config.differentiate_mode == 'reverse_symbolic':
-        mode = EXPR.differentiate.Modes.reverse_symbolic
-    elif config.differentiate_mode == 'sympy':
-        mode = EXPR.differentiate.Modes.sympy
-    for c in model.MindtPy_utils.nonlinear_constraint_list:
+    mode = EXPR.differentiate.Modes(differentiate_mode)
+    for c in constraint_list:
         vars_in_constr = list(EXPR.identify_variables(c.body))
         jac_list = EXPR.differentiate(c.body, wrt_list=vars_in_constr, mode=mode)
         jacobians[c] = ComponentMap(
@@ -70,7 +66,7 @@ def calc_jacobians(model, config):
     return jacobians
 
 
-def initialize_feas_subproblem(m, config):
+def initialize_feas_subproblem(m, feasibility_norm):
     """Adds feasibility slack variables according to config.feasibility_norm (given an infeasible problem).
        Defines the objective function of the feasibility subproblem.
 
@@ -78,14 +74,14 @@ def initialize_feas_subproblem(m, config):
     ----------
     m : Pyomo model
         The feasbility NLP subproblem.
-    config : ConfigBlock
-        The specific configurations for MindtPy.
+    feasibility_norm : String
+        The norm used to generate the objective function.
     """
     MindtPy = m.MindtPy_utils
     # generate new constraints
     for i, constr in enumerate(MindtPy.nonlinear_constraint_list, 1):
         if constr.has_ub():
-            if config.feasibility_norm in {'L1', 'L2'}:
+            if feasibility_norm in {'L1', 'L2'}:
                 MindtPy.feas_opt.feas_constraints.add(
                     constr.body - constr.upper <= MindtPy.feas_opt.slack_var[i]
                 )
@@ -94,7 +90,7 @@ def initialize_feas_subproblem(m, config):
                     constr.body - constr.upper <= MindtPy.feas_opt.slack_var
                 )
         if constr.has_lb():
-            if config.feasibility_norm in {'L1', 'L2'}:
+            if feasibility_norm in {'L1', 'L2'}:
                 MindtPy.feas_opt.feas_constraints.add(
                     constr.body - constr.lower >= -MindtPy.feas_opt.slack_var[i]
                 )
@@ -103,11 +99,11 @@ def initialize_feas_subproblem(m, config):
                     constr.body - constr.lower >= -MindtPy.feas_opt.slack_var
                 )
     # Setup objective function for the feasibility subproblem.
-    if config.feasibility_norm == 'L1':
+    if feasibility_norm == 'L1':
         MindtPy.feas_obj = Objective(
             expr=sum(s for s in MindtPy.feas_opt.slack_var.values()), sense=minimize
         )
-    elif config.feasibility_norm == 'L2':
+    elif feasibility_norm == 'L2':
         MindtPy.feas_obj = Objective(
             expr=sum(s * s for s in MindtPy.feas_opt.slack_var.values()), sense=minimize
         )
@@ -134,12 +130,12 @@ def add_var_bound(model, config):
         for var in EXPR.identify_variables(c.body):
             if var.has_lb() and var.has_ub():
                 continue
-            elif not var.has_lb():
+            if not var.has_lb():
                 if var.is_integer():
                     var.setlb(-config.integer_var_bound - 1)
                 else:
                     var.setlb(-config.continuous_var_bound - 1)
-            elif not var.has_ub():
+            if not var.has_ub():
                 if var.is_integer():
                     var.setub(config.integer_var_bound)
                 else:
@@ -345,9 +341,11 @@ def generate_lag_objective_function(
     with time_code(timing, 'PyomoNLP'):
         nlp = pyomo_nlp.PyomoNLP(temp_model)
         lam = [
-            -temp_model.dual[constr]
-            if abs(temp_model.dual[constr]) > config.zero_tolerance
-            else 0
+            (
+                -temp_model.dual[constr]
+                if abs(temp_model.dual[constr]) > config.zero_tolerance
+                else 0
+            )
             for constr in nlp.get_pyomo_constraints()
         ]
         nlp.set_duals(lam)
@@ -567,7 +565,9 @@ def set_solver_mipgap(opt, solver_name, config):
         opt.options['add_options'].append('option optcr=%s;' % config.mip_solver_mipgap)
 
 
-def set_solver_constraint_violation_tolerance(opt, solver_name, config, warm_start=True):
+def set_solver_constraint_violation_tolerance(
+    opt, solver_name, config, warm_start=True
+):
     """Set constraint violation tolerance for solvers.
 
     Parameters
@@ -580,11 +580,11 @@ def set_solver_constraint_violation_tolerance(opt, solver_name, config, warm_sta
         The specific configurations for MindtPy.
     """
     if solver_name == 'baron':
-        opt.options['AbsConFeasTol'] = config.zero_tolerance
+        opt.options['AbsConFeasTol'] = config.constraint_tolerance
     elif solver_name in {'ipopt', 'appsi_ipopt'}:
-        opt.options['constr_viol_tol'] = config.zero_tolerance
+        opt.options['constr_viol_tol'] = config.constraint_tolerance
     elif solver_name == 'cyipopt':
-        opt.config.options['constr_viol_tol'] = config.zero_tolerance
+        opt.config.options['constr_viol_tol'] = config.constraint_tolerance
     elif solver_name == 'gams':
         if config.nlp_solver_args['solver'] in {
             'ipopt',
@@ -599,7 +599,7 @@ def set_solver_constraint_violation_tolerance(opt, solver_name, config, warm_sta
             )
             if config.nlp_solver_args['solver'] in {'ipopt', 'ipopth'}:
                 opt.options['add_options'].append(
-                    'constr_viol_tol ' + str(config.zero_tolerance)
+                    'constr_viol_tol ' + str(config.constraint_tolerance)
                 )
                 if warm_start:
                     pass
@@ -614,15 +614,15 @@ def set_solver_constraint_violation_tolerance(opt, solver_name, config, warm_sta
                     # )
             elif config.nlp_solver_args['solver'] == 'conopt':
                 opt.options['add_options'].append(
-                    'RTNWMA ' + str(config.zero_tolerance)
+                    'RTNWMA ' + str(config.constraint_tolerance)
                 )
             elif config.nlp_solver_args['solver'] == 'msnlp':
                 opt.options['add_options'].append(
-                    'feasibility_tolerance ' + str(config.zero_tolerance)
+                    'feasibility_tolerance ' + str(config.constraint_tolerance)
                 )
             elif config.nlp_solver_args['solver'] == 'baron':
                 opt.options['add_options'].append(
-                    'AbsConFeasTol ' + str(config.zero_tolerance)
+                    'AbsConFeasTol ' + str(config.constraint_tolerance)
                 )
             opt.options['add_options'].append('$offecho')
 
@@ -692,35 +692,13 @@ def copy_var_list_values_from_solution_pool(
         elif config.mip_solver == 'gurobi_persistent':
             solver_model.setParam(gurobipy.GRB.Param.SolutionNumber, solution_name)
             var_val = var_map[v_from].Xn
-        # We don't want to trigger the reset of the global stale
-        # indicator, so we will set this variable to be "stale",
-        # knowing that set_value will switch it back to "not
-        # stale"
-        v_to.stale = True
-        rounded_val = int(round(var_val))
-        # NOTE: PEP 2180 changes the var behavior so that domain /
-        # bounds violations no longer generate exceptions (and
-        # instead log warnings).  This means that the following will
-        # always succeed and the ValueError should never be raised.
-        if var_val in v_to.domain \
-            and not ((v_to.has_lb() and var_val < v_to.lb)) \
-            and not ((v_to.has_ub() and var_val > v_to.ub)):
-            v_to.set_value(var_val, skip_validation=True)
-        elif v_to.has_lb() and var_val < v_to.lb:
-            v_to.set_value(v_to.lb)
-        elif v_to.has_ub() and var_val > v_to.ub:
-            v_to.set_value(v_to.ub)
-        # Check to see if this is just a tolerance issue
-        elif ignore_integrality and v_to.is_integer():
-            v_to.set_value(var_val, skip_validation=True)
-        elif v_to.is_integer() and (
-            abs(var_val - rounded_val) <= config.integer_tolerance
-        ):
-            v_to.set_value(rounded_val, skip_validation=True)
-        elif abs(var_val) <= config.zero_tolerance and 0 in v_to.domain:
-            v_to.set_value(0, skip_validation=True)
-        else:
-            raise ValueError("copy_var_list_values_from_solution_pool failed.")
+        set_var_valid_value(
+            v_to,
+            var_val,
+            config.integer_tolerance,
+            config.zero_tolerance,
+            ignore_integrality,
+        )
 
 
 class GurobiPersistent4MindtPy(GurobiPersistent):
@@ -743,25 +721,6 @@ class GurobiPersistent4MindtPy(GurobiPersistent):
             )
 
         return f
-
-
-def set_up_logger(config):
-    """Set up the formatter and handler for logger.
-
-    Parameters
-    ----------
-    config : ConfigBlock
-        The specific configurations for MindtPy.
-    """
-    config.logger.handlers.clear()
-    config.logger.propagate = False
-    ch = logging.StreamHandler()
-    ch.setLevel(config.logging_level)
-    # create formatter and add it to the handlers
-    formatter = logging.Formatter('%(message)s')
-    ch.setFormatter(formatter)
-    # add the handlers to logger
-    config.logger.addHandler(ch)
 
 
 def epigraph_reformulation(exp, slack_var_list, constraint_list, use_mcpp, sense):
@@ -968,12 +927,31 @@ def generate_norm_constraint(fp_nlp_model, mip_model, config):
         ):
             fp_nlp_model.norm_constraint.add(nlp_var - mip_var.value <= rhs)
 
-def copy_var_list_values(from_list, to_list, config,
-                         skip_stale=False, skip_fixed=True,
-                         ignore_integrality=False):
+
+def copy_var_list_values(
+    from_list,
+    to_list,
+    config,
+    skip_stale=False,
+    skip_fixed=True,
+    ignore_integrality=False,
+):
     """Copy variable values from one list to another.
     Rounds to Binary/Integer if necessary
     Sets to zero for NonNegativeReals if necessary
+
+    from_list : list
+        The variables that provide the values to copy from.
+    to_list : list
+        The variables that need to set value.
+    config : ConfigBlock
+        The specific configurations for MindtPy.
+    skip_stale : bool, optional
+        Whether to skip the stale variables, by default False.
+    skip_fixed : bool, optional
+        Whether to skip the fixed variables, by default True.
+    ignore_integrality : bool, optional
+        Whether to ignore the integrality of integer variables, by default False.
     """
     for v_from, v_to in zip(from_list, to_list):
         if skip_stale and v_from.stale:
@@ -981,21 +959,68 @@ def copy_var_list_values(from_list, to_list, config,
         if skip_fixed and v_to.is_fixed():
             continue  # Skip fixed variables.
         var_val = value(v_from, exception=False)
-        rounded_val = int(round(var_val))
-        if var_val in v_to.domain \
-            and not ((v_to.has_lb() and var_val < v_to.lb)) \
-            and not ((v_to.has_ub() and var_val > v_to.ub)):
-            v_to.set_value(value(v_from, exception=False))
-        elif v_to.has_lb() and var_val < v_to.lb:
-            v_to.set_value(v_to.lb)
-        elif v_to.has_ub() and var_val > v_to.ub:
-            v_to.set_value(v_to.ub)
-        elif ignore_integrality and v_to.is_integer():
-            v_to.set_value(value(v_from, exception=False), skip_validation=True)
-        elif v_to.is_integer() and (math.fabs(var_val - rounded_val) <=
-                                    config.integer_tolerance):
-            v_to.set_value(rounded_val)
-        elif abs(var_val) <= config.zero_tolerance and 0 in v_to.domain:
-            v_to.set_value(0)
-        else:
-            raise ValueError("copy_var_list_values failed.")
+        set_var_valid_value(
+            v_to,
+            var_val,
+            config.integer_tolerance,
+            config.zero_tolerance,
+            ignore_integrality,
+        )
+
+
+def set_var_valid_value(
+    var, var_val, integer_tolerance, zero_tolerance, ignore_integrality
+):
+    """This function tries to set a valid value for variable with the given input.
+    Rounds to Binary/Integer if necessary.
+    Sets to zero for NonNegativeReals if necessary.
+
+    Parameters
+    ----------
+    var : Var
+        The variable that needs to set value.
+    var_val : float
+        The desired value to set for var.
+    integer_tolerance: float
+        Tolerance on integral values.
+    zero_tolerance: float
+        Tolerance on variable equal to zero.
+    ignore_integrality : bool, optional
+        Whether to ignore the integrality of integer variables, by default False.
+
+    Raises
+    ------
+    ValueError
+        Cannot successfully set the value to the variable.
+    """
+    # NOTE: PEP 2180 changes the var behavior so that domain
+    # bounds violations no longer generate exceptions (and
+    # instead log warnings).  This means that the set_value method
+    # will always succeed and the ValueError should never be raised.
+
+    # We don't want to trigger the reset of the global stale
+    # indicator, so we will set this variable to be "stale",
+    # knowing that set_value will switch it back to "not stale".
+    var.stale = True
+    rounded_val = int(round(var_val))
+    if (
+        var_val in var.domain
+        and not ((var.has_lb() and var_val < var.lb))
+        and not ((var.has_ub() and var_val > var.ub))
+    ):
+        var.set_value(var_val)
+    elif var.has_lb() and var_val < var.lb:
+        var.set_value(var.lb)
+    elif var.has_ub() and var_val > var.ub:
+        var.set_value(var.ub)
+    elif ignore_integrality and var.is_integer():
+        var.set_value(var_val, skip_validation=True)
+    elif var.is_integer() and (math.fabs(var_val - rounded_val) <= integer_tolerance):
+        var.set_value(rounded_val)
+    elif abs(var_val) <= zero_tolerance and 0 in var.domain:
+        var.set_value(0)
+    else:
+        raise ValueError(
+            "set_var_valid_value failed with variable {}, value = {} and rounded value = {}"
+            "".format(var.name, var_val, rounded_val)
+        )

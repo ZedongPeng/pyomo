@@ -1,3 +1,14 @@
+#  ___________________________________________________________________________
+#
+#  Pyomo: Python Optimization Modeling Objects
+#  Copyright (c) 2008-2024
+#  National Technology and Engineering Solutions of Sandia, LLC
+#  Under the terms of Contract DE-NA0003525 with National Technology and
+#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
+#  rights in this software.
+#  This software is distributed under the 3-clause BSD License.
+#  ___________________________________________________________________________
+
 # -*- coding: utf-8 -*-
 import logging
 from pyomo.common.config import (
@@ -313,6 +324,15 @@ def _add_common_configs(CONFIG):
         ),
     )
     CONFIG.declare(
+        'call_before_subproblem_solve',
+        ConfigValue(
+            default=_DoNothing(),
+            domain=None,
+            description='Function to be executed before every subproblem',
+            doc='Callback hook before a solution of the nonlinear subproblem.',
+        ),
+    )
+    CONFIG.declare(
         'call_after_subproblem_solve',
         ConfigValue(
             default=_DoNothing(),
@@ -502,12 +522,15 @@ def _add_common_configs(CONFIG):
             domain=bool,
         ),
     )
-    CONFIG.declare("use_baron_convexification", ConfigValue(
-        default=False,
-        domain=bool,
-        description="use baron to provide the convex relations for nonconvex MINLPs.",
-        doc="use baron to provide the convex relations for nonconvex MINLPs."
-    ))
+    CONFIG.declare(
+        "use_baron_convexification",
+        ConfigValue(
+            default=False,
+            domain=bool,
+            description="use baron to provide the convex relations for nonconvex MINLPs.",
+            doc="use baron to provide the convex relations for nonconvex MINLPs.",
+        ),
+    )
 
 
 def _add_subsolver_configs(CONFIG):
@@ -552,7 +575,7 @@ def _add_subsolver_configs(CONFIG):
                     'cplex_persistent',
                     'appsi_cplex',
                     'appsi_gurobi',
-                    # 'appsi_highs', TODO: feasibility pump now fails with appsi_highs #2951
+                    'appsi_highs',
                 ]
             ),
             description='MIP subsolver name',
@@ -634,11 +657,19 @@ def _add_subsolver_configs(CONFIG):
                     'cplex_persistent',
                     'appsi_cplex',
                     'appsi_gurobi',
-                    # 'appsi_highs',
+                    'appsi_highs',
                 ]
             ),
             description='MIP subsolver for regularization problem',
             doc='Which MIP subsolver is going to be used for solving the regularization problem.',
+        ),
+    )
+    CONFIG.declare(
+        'warm_start_fixed_nlp',
+        ConfigValue(
+            default=True,
+            description='whether to warm start the fixed NLP subproblem.',
+            domain=bool,
         ),
     )
 

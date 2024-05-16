@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -10,9 +10,9 @@
 #  ___________________________________________________________________________
 
 from pyomo.common.errors import IterationLimitError
-from pyomo.core.expr.numvalue import native_numeric_types, value, is_fixed
+from pyomo.common.numeric_types import native_numeric_types, native_complex_types, value
 from pyomo.core.expr.calculus.derivatives import differentiate
-from pyomo.core.base.constraint import Constraint, _ConstraintData
+from pyomo.core.base.constraint import Constraint
 
 import logging
 
@@ -53,9 +53,9 @@ def calculate_variable_from_constraint(
 
     Parameters:
     -----------
-    variable: :py:class:`_VarData`
+    variable: :py:class:`VarData`
         The variable to solve for
-    constraint: :py:class:`_ConstraintData` or relational expression or `tuple`
+    constraint: :py:class:`ConstraintData` or relational expression or `tuple`
         The equality constraint to use to solve for the variable value.
         May be a `ConstraintData` object or any valid argument for
         ``Constraint(expr=<>)`` (i.e., a relational expression or 2- or
@@ -81,9 +81,16 @@ def calculate_variable_from_constraint(
 
     """
     # Leverage all the Constraint logic to process the incoming tuple/expression
-    if not isinstance(constraint, _ConstraintData):
+    if not getattr(constraint, 'ctype', None) is Constraint:
         constraint = Constraint(expr=constraint, name=type(constraint).__name__)
         constraint.construct()
+
+    if constraint.is_indexed():
+        raise ValueError(
+            'calculate_variable_from_constraint(): constraint must be a '
+            'scalar constraint or a single ConstraintData.  Received '
+            f'{constraint.__class__.__name__} ("{constraint.name}")'
+        )
 
     body = constraint.body
     lower = constraint.lb
@@ -91,6 +98,9 @@ def calculate_variable_from_constraint(
 
     if lower != upper:
         raise ValueError(f"Constraint '{constraint}' must be an equality constraint")
+
+    _invalid_types = set(native_complex_types)
+    _invalid_types.add(type(None))
 
     if variable.value is None:
         # Note that we use "skip_validation=True" here as well, as the
@@ -151,7 +161,7 @@ def calculate_variable_from_constraint(
         # to using Newton's method.
         residual_2 = None
 
-    if residual_2 is not None and type(residual_2) is not complex:
+    if residual_2.__class__ not in _invalid_types:
         # if the variable appears linearly with a coefficient of 1, then we
         # are done
         if abs(residual_2 - upper) < eps:
@@ -167,11 +177,7 @@ def calculate_variable_from_constraint(
         if slope:
             variable.set_value(-intercept / slope, skip_validation=True)
             body_val = value(body, exception=False)
-            if (
-                body_val is not None
-                and body_val.__class__ is not complex
-                and abs(body_val - upper) < eps
-            ):
+            if body_val.__class__ not in _invalid_types and abs(body_val - upper) < eps:
                 # Re-set the variable value to trigger any warnings WRT
                 # the final variable state
                 variable.set_value(variable.value)
@@ -234,7 +240,7 @@ def calculate_variable_from_constraint(
         xk = value(variable)
         try:
             fk = value(expr)
-            if type(fk) is complex:
+            if fk.__class__ in _invalid_types and fk is not None:
                 raise ValueError("Complex numbers are not allowed in Newton's method.")
         except:
             # We hit numerical problems with the last step (possible if
@@ -275,7 +281,7 @@ def calculate_variable_from_constraint(
                 # HACK for Python3 support, pending resolution of #879
                 # Issue #879 also pertains to other checks for "complex"
                 # in this method.
-                if type(fkp1) is complex:
+                if fkp1.__class__ in _invalid_types:
                     # We cannot perform computations on complex numbers
                     fkp1 = None
                 if fkp1 is not None and fkp1**2 < c1 * fk**2:
@@ -289,7 +295,7 @@ def calculate_variable_from_constraint(
 
             if alpha <= alpha_min:
                 residual = value(expr, exception=False)
-                if residual is None or type(residual) is complex:
+                if residual.__class__ in _invalid_types:
                     residual = "{function evaluation error}"
                 raise IterationLimitError(
                     f"Linesearch iteration limit reached solving for "
