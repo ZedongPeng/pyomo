@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -107,6 +107,31 @@ class TestDisjunction(unittest.TestCase):
 
         self.assertEqual(len(disjuncts[0].parent_component().name), 11)
         self.assertEqual(disjuncts[0].name, "f_disjuncts[0]")
+
+    def test_construct_invalid_component(self):
+        m = ConcreteModel()
+        m.d = Disjunct([1, 2])
+        with self.assertRaisesRegex(
+            ValueError,
+            "Unexpected term for Disjunction 'dd'.\n    "
+            "Expected a Disjunct object, relational expression, or iterable of\n"
+            "    relational expressions but got 'IndexedDisjunct'",
+        ):
+            m.dd = Disjunction(expr=[m.d])
+        with self.assertRaisesRegex(
+            ValueError,
+            "Unexpected term for Disjunction 'ee'.\n    "
+            "Expected a Disjunct object, relational expression, or iterable of\n"
+            "    relational expressions but got 'str' in 'list'",
+        ):
+            m.ee = Disjunction(expr=[['a']])
+        with self.assertRaisesRegex(
+            ValueError,
+            "Unexpected term for Disjunction 'ff'.\n    "
+            "Expected a Disjunct object, relational expression, or iterable of\n"
+            "    relational expressions but got 'str'",
+        ):
+            m.ff = Disjunction(expr=['a'])
 
 
 class TestDisjunct(unittest.TestCase):
@@ -607,19 +632,13 @@ class TestAutoVars(unittest.TestCase):
         out = StringIO()
         with LoggingIntercept(out):
             e = m.iv + 1
-        assertExpressionsEqual(
-            self, e, EXPR.LinearExpression([EXPR.MonomialTermExpression((1, m.biv)), 1])
-        )
+        assertExpressionsEqual(self, e, EXPR.LinearExpression([m.biv, 1]))
         self.assertIn(deprecation_msg, out.getvalue())
 
         out = StringIO()
         with LoggingIntercept(out):
             e = m.iv - 1
-        assertExpressionsEqual(
-            self,
-            e,
-            EXPR.LinearExpression([EXPR.MonomialTermExpression((1, m.biv)), -1]),
-        )
+        assertExpressionsEqual(self, e, EXPR.LinearExpression([m.biv, -1]))
         self.assertIn(deprecation_msg, out.getvalue())
 
         out = StringIO()
@@ -640,9 +659,7 @@ class TestAutoVars(unittest.TestCase):
         out = StringIO()
         with LoggingIntercept(out):
             e = 1 + m.iv
-        assertExpressionsEqual(
-            self, e, EXPR.LinearExpression([1, EXPR.MonomialTermExpression((1, m.biv))])
-        )
+        assertExpressionsEqual(self, e, EXPR.LinearExpression([1, m.biv]))
         self.assertIn(deprecation_msg, out.getvalue())
 
         out = StringIO()
@@ -674,20 +691,14 @@ class TestAutoVars(unittest.TestCase):
         with LoggingIntercept(out):
             a = m.iv
             a += 1
-        assertExpressionsEqual(
-            self, a, EXPR.LinearExpression([EXPR.MonomialTermExpression((1, m.biv)), 1])
-        )
+        assertExpressionsEqual(self, a, EXPR.LinearExpression([m.biv, 1]))
         self.assertIn(deprecation_msg, out.getvalue())
 
         out = StringIO()
         with LoggingIntercept(out):
             a = m.iv
             a -= 1
-        assertExpressionsEqual(
-            self,
-            a,
-            EXPR.LinearExpression([EXPR.MonomialTermExpression((1, m.biv)), -1]),
-        )
+        assertExpressionsEqual(self, a, EXPR.LinearExpression([m.biv, -1]))
         self.assertIn(deprecation_msg, out.getvalue())
 
         out = StringIO()

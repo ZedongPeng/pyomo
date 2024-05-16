@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -113,7 +113,7 @@ def add_oa_cuts(
                     constr.has_ub()
                     and (
                         linearize_active
-                        and abs(constr.uslack()) < config.zero_tolerance
+                        and abs(constr.uslack()) < config.constraint_tolerance
                     )
                     or (linearize_violated and constr.uslack() < 0)
                     or (config.linearize_inactive and constr.uslack() > 0)
@@ -151,7 +151,7 @@ def add_oa_cuts(
                     constr.has_lb()
                     and (
                         linearize_active
-                        and abs(constr.lslack()) < config.zero_tolerance
+                        and abs(constr.lslack()) < config.constraint_tolerance
                     )
                     or (linearize_violated and constr.lslack() < 0)
                     or (config.linearize_inactive and constr.lslack() > 0)
@@ -200,6 +200,7 @@ def add_oa_cuts_for_grey_box(
             .evaluate_jacobian_outputs()
             .toarray()
         )
+        # Enumerate over values works well now. However, it might be stable if the values() method changes.
         for index, output in enumerate(target_model_grey_box.outputs.values()):
             dual_value = jacobians_model.dual[jacobian_model_grey_box][
                 output.name.replace("outputs", "output_constraints")
@@ -213,8 +214,8 @@ def add_oa_cuts_for_grey_box(
                             target_model_grey_box.inputs.values()
                         )
                     )
+                    - (output - value(output))
                 )
-                - (output - value(output))
                 - (slack_var if config.add_slack else 0)
                 <= 0
             )
@@ -274,8 +275,9 @@ def add_ecp_cuts(
                 try:
                     upper_slack = constr.uslack()
                 except (ValueError, OverflowError) as e:
+                    config.logger.error(e, exc_info=True)
                     config.logger.error(
-                        str(e) + '\nConstraint {} has caused either a '
+                        'Constraint {} has caused either a '
                         'ValueError or OverflowError.'
                         '\n'.format(constr)
                     )
@@ -303,8 +305,9 @@ def add_ecp_cuts(
                 try:
                     lower_slack = constr.lslack()
                 except (ValueError, OverflowError) as e:
+                    config.logger.error(e, exc_info=True)
                     config.logger.error(
-                        str(e) + '\nConstraint {} has caused either a '
+                        'Constraint {} has caused either a '
                         'ValueError or OverflowError.'
                         '\n'.format(constr)
                     )
@@ -427,9 +430,9 @@ def add_affine_cuts(target_model, config, timing):
             try:
                 mc_eqn = mc(constr.body)
             except MCPP_Error as e:
+                config.logger.error(e, exc_info=True)
                 config.logger.error(
-                    '\nSkipping constraint %s due to MCPP error %s'
-                    % (constr.name, str(e))
+                    'Skipping constraint %s due to MCPP error' % (constr.name)
                 )
                 continue  # skip to the next constraint
 
