@@ -29,7 +29,6 @@ from pyomo.repn import generate_standard_repn
 from pyomo.contrib.mcpp.pyomo_mcpp import mcpp_available, McCormick
 from pyomo.contrib.fbbt.fbbt import compute_bounds_on_expr
 import pyomo.core.expr as EXPR
-from pyomo.opt import ProblemSense
 from pyomo.contrib.gdpopt.util import get_main_elapsed_time, time_code
 from pyomo.util.model_size import build_model_size_report
 from pyomo.common.dependencies import attempt_import
@@ -581,11 +580,11 @@ def set_solver_constraint_violation_tolerance(
         The specific configurations for MindtPy.
     """
     if solver_name == 'baron':
-        opt.options['AbsConFeasTol'] = config.zero_tolerance
+        opt.options['AbsConFeasTol'] = config.constraint_tolerance
     elif solver_name in {'ipopt', 'appsi_ipopt'}:
-        opt.options['constr_viol_tol'] = config.zero_tolerance
+        opt.options['constr_viol_tol'] = config.constraint_tolerance
     elif solver_name == 'cyipopt':
-        opt.config.options['constr_viol_tol'] = config.zero_tolerance
+        opt.config.options['constr_viol_tol'] = config.constraint_tolerance
     elif solver_name == 'gams':
         if config.nlp_solver_args['solver'] in {
             'ipopt',
@@ -600,7 +599,7 @@ def set_solver_constraint_violation_tolerance(
             )
             if config.nlp_solver_args['solver'] in {'ipopt', 'ipopth'}:
                 opt.options['add_options'].append(
-                    'constr_viol_tol ' + str(config.zero_tolerance)
+                    'constr_viol_tol ' + str(config.constraint_tolerance)
                 )
                 if warm_start:
                     # Ipopt warmstart options
@@ -614,15 +613,15 @@ def set_solver_constraint_violation_tolerance(
                     )
             elif config.nlp_solver_args['solver'] == 'conopt':
                 opt.options['add_options'].append(
-                    'RTNWMA ' + str(config.zero_tolerance)
+                    'RTNWMA ' + str(config.constraint_tolerance)
                 )
             elif config.nlp_solver_args['solver'] == 'msnlp':
                 opt.options['add_options'].append(
-                    'feasibility_tolerance ' + str(config.zero_tolerance)
+                    'feasibility_tolerance ' + str(config.constraint_tolerance)
                 )
             elif config.nlp_solver_args['solver'] == 'baron':
                 opt.options['add_options'].append(
-                    'AbsConFeasTol ' + str(config.zero_tolerance)
+                    'AbsConFeasTol ' + str(config.constraint_tolerance)
                 )
             opt.options['add_options'].append('$offecho')
 

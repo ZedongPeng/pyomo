@@ -162,7 +162,7 @@ class LazyOACallback_cplex(
                         constr.has_ub()
                         and (
                             linearize_active
-                            and abs(constr.uslack()) < config.zero_tolerance
+                            and abs(constr.uslack()) < config.constraint_tolerance
                         )
                         or (linearize_violated and constr.uslack() < 0)
                         or (config.linearize_inactive and constr.uslack() > 0)
@@ -201,7 +201,7 @@ class LazyOACallback_cplex(
                         constr.has_lb()
                         and (
                             linearize_active
-                            and abs(constr.lslack()) < config.zero_tolerance
+                            and abs(constr.lslack()) < config.constraint_tolerance
                         )
                         or (linearize_violated and constr.lslack() < 0)
                         or (config.linearize_inactive and constr.lslack() > 0)
@@ -773,6 +773,9 @@ class LazyOACallback_cplex(
             mindtpy_solver.integer_list.append(mindtpy_solver.curr_int_sol)
 
         # solve subproblem
+        # Call the NLP pre-solve callback
+        with time_code(mindtpy_solver.timing, 'Call before subproblem solve'):
+            config.call_before_subproblem_solve(mindtpy_solver.fixed_nlp)
         # The constraint linearization happens in the handlers
         fixed_nlp, fixed_nlp_result = mindtpy_solver.solve_subproblem()
         # add oa cuts
@@ -919,6 +922,9 @@ def LazyOACallback_gurobi(cb_m, cb_opt, cb_where, mindtpy_solver, config):
                 cut_ind = len(mindtpy_solver.mip.MindtPy_utils.cuts.oa_cuts)
 
         # solve subproblem
+        # Call the NLP pre-solve callback
+        with time_code(mindtpy_solver.timing, 'Call before subproblem solve'):
+            config.call_before_subproblem_solve(mindtpy_solver.fixed_nlp)
         # The constraint linearization happens in the handlers
         fixed_nlp, fixed_nlp_result = mindtpy_solver.solve_subproblem()
 
