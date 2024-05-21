@@ -602,16 +602,15 @@ def set_solver_constraint_violation_tolerance(
                     'constr_viol_tol ' + str(config.constraint_tolerance)
                 )
                 if warm_start:
-                    pass
                     # Ipopt warmstart options
-                    # opt.options['add_options'].append(
-                    #     'warm_start_init_point       yes\n'
-                    #     'warm_start_bound_push       1e-9\n'
-                    #     'warm_start_bound_frac       1e-9\n'
-                    #     'warm_start_slack_bound_frac 1e-9\n'
-                    #     'warm_start_slack_bound_push 1e-9\n'
-                    #     'warm_start_mult_bound_push  1e-9\n'
-                    # )
+                    opt.options['add_options'].append(
+                        'warm_start_init_point       yes\n'
+                        'warm_start_bound_push       1e-9\n'
+                        'warm_start_bound_frac       1e-9\n'
+                        'warm_start_slack_bound_frac 1e-9\n'
+                        'warm_start_slack_bound_push 1e-9\n'
+                        'warm_start_mult_bound_push  1e-9\n'
+                    )
             elif config.nlp_solver_args['solver'] == 'conopt':
                 opt.options['add_options'].append(
                     'RTNWMA ' + str(config.constraint_tolerance)
