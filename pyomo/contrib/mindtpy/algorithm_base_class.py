@@ -2974,7 +2974,7 @@ class _MindtPyAlgorithm(object):
                         fixed_nlp, fixed_nlp_result = self.solve_subproblem()
                         self.handle_nlp_subproblem_tc(fixed_nlp, fixed_nlp_result)
 
-            if self.algorithm_should_terminate(check_cycling=True):
+            if self.algorithm_should_terminate(check_cycling=not config.solution_pool):
                 self.last_iter_cuts = False
                 break
 
@@ -2998,26 +2998,31 @@ class _MindtPyAlgorithm(object):
                         break
                 else:
                     solution_name_obj = self.get_solution_name_obj(main_mip_results)
+                    all_explored = True
                     for index, (name, _) in enumerate(solution_name_obj):
                         # the optimal solution of the main problem has been added to integer_list above
                         # so we should skip checking cycling for the first solution in the solution pool
-                        if index > 0:
-                            copy_var_list_values_from_solution_pool(
-                                self.mip.MindtPy_utils.variable_list,
-                                self.fixed_nlp.MindtPy_utils.variable_list,
-                                config,
-                                solver_model=main_mip_results._solver_model,
-                                var_map=main_mip_results._pyomo_var_to_solver_var_map,
-                                solution_name=name,
+                        # self.algorithm_should_terminate(check_cycling=not config.solution_pool) has been changed.
+                        # No longer need to skip cycling check for the best solution in the solution pool.
+                        # if index > 0:
+
+                        copy_var_list_values_from_solution_pool(
+                            self.mip.MindtPy_utils.variable_list,
+                            self.fixed_nlp.MindtPy_utils.variable_list,
+                            config,
+                            solver_model=main_mip_results._solver_model,
+                            var_map=main_mip_results._pyomo_var_to_solver_var_map,
+                            solution_name=name,
+                        )
+                        self.curr_int_sol = get_integer_solution(self.fixed_nlp)
+                        if self.curr_int_sol in set(self.integer_list):
+                            config.logger.info(
+                                'The same combination has been explored and will be skipped here.'
                             )
-                            self.curr_int_sol = get_integer_solution(self.fixed_nlp)
-                            if self.curr_int_sol in set(self.integer_list):
-                                config.logger.info(
-                                    'The same combination has been explored and will be skipped here.'
-                                )
-                                continue
-                            else:
-                                self.integer_list.append(self.curr_int_sol)
+                            continue
+                        else:
+                            self.integer_list.append(self.curr_int_sol)
+                            all_explored = False
 
                         # Call the NLP pre-solve callback
                         with time_code(self.timing, 'Call before subproblem solve'):
@@ -3033,6 +3038,11 @@ class _MindtPyAlgorithm(object):
                         if self.algorithm_should_terminate(check_cycling=False):
                             self.last_iter_cuts = True
                             break  # TODO: break two loops.
+                    if all_explored:
+                        config.logger.info("Cycling")
+                        if self.primal_bound not in [float('-inf'), float('inf')]:
+                            self.results.solver.termination_condition = tc.feasible
+                        break
 
         # if add_no_good_cuts is True, the bound obtained in the last iteration is no reliable.
         # we correct it after the iteration.
@@ -3049,6 +3059,18 @@ class _MindtPyAlgorithm(object):
         )
 
     def get_solution_name_obj(self, main_mip_results):
+        """Obtain the name and objective value of the solutions in the solution pool.
+
+        Parameters
+        ----------
+        main_mip_results : SolverResults
+            The results of the main problem.
+
+        Returns
+        -------
+        list
+            a 2D list containing the name and objective value of the solutions in the solution pool.
+        """
         if self.config.mip_solver == 'cplex_persistent':
             solution_pool_names = (
                 main_mip_results._solver_model.solution.pool.get_names()
@@ -3067,11 +3089,50 @@ class _MindtPyAlgorithm(object):
                     gurobipy.GRB.Param.SolutionNumber, name
                 )
                 obj = main_mip_results._solver_model.PoolObjVal
+                # Here the list only contains the name and objective value of the solutions in the solution pool.
+                # If you want to add more information, you can add them here.
             solution_name_obj.append([name, obj])
+        # sort the solutions by objective value, which can be changed according to the user's needs.
         solution_name_obj.sort(
             key=itemgetter(1), reverse=self.objective_sense == maximize
         )
+        # TODO: I am not sure if you want to sort the solution pool or choose one solution from the pool.
+        # TODO: add whatever you want to sort the solution pool
+        self.sort_solutions(solution_name_obj, main_mip_results)
+        # only keep the first num_solution_iteration solutions
         solution_name_obj = solution_name_obj[: self.config.num_solution_iteration]
+        return solution_name_obj
+
+    def sort_solutions(self, solution_name_obj, main_mip_results):
+        """Choose the solutions from the solution pool.
+
+        Parameters
+        ----------
+        solution_name_obj : list
+            a 2D list containing the name and objective value of the solutions in the solution pool.
+
+        main_mip_results : SolverResults
+            The results of the main problem.
+
+        Returns
+        -------
+        solution_name_obj : list
+            a sorted 2D list containing the name and objective value of the solutions in the solution pool.
+
+        """
+        # Choose the solutions from the solution pool.
+        # for name, obj in solution_name_obj:
+        #     # get the solution from the solution pool
+        #     copy_var_list_values_from_solution_pool(
+        #         self.mip.MindtPy_utils.variable_list,
+        #         self.fixed_nlp.MindtPy_utils.variable_list,
+        #         self.config,
+        #         solver_model=main_mip_results._solver_model,
+        #         var_map=main_mip_results._pyomo_var_to_solver_var_map,
+        #         solution_name=name,
+        #     )
+        #     # Call your rl model or other strategies to sort the solution pools.
+
         return solution_name_obj
 
     def add_regularization(self):
