@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -526,5 +526,41 @@ def _add_tolerance_configs(CONFIG):
             default=1e-6,
             domain=NonNegativeFloat,
             description="Tolerance for bound convergence.",
+        ),
+    )
+
+
+def _add_ldsda_configs(CONFIG):
+    CONFIG.declare(
+        "direction_norm",
+        ConfigValue(
+            default='L2',
+            domain=In(['L2', 'Linf']),
+            description="The norm to use for the search direction",
+        ),
+    )
+    CONFIG.declare(
+        "starting_point",
+        ConfigValue(default=None, description="The value list of external variables."),
+    )
+    CONFIG.declare(
+        "logical_constraint_list",
+        ConfigValue(
+            default=None,
+            description="""
+            The list of logical constraints to be reformulated into external variables.
+            The logical constraints should be in the same order of provided starting point.
+            The provide logical constraints should be ExactlyExpression.
+            TODO: Maybe we can find a better design for this.""",
+        ),
+    )
+    CONFIG.declare(
+        "disjunction_list",
+        ConfigValue(
+            default=None,
+            description="""
+            The list of disjunctions to be reformulated into external variables.
+            The disjunctions should be in the same order of provided starting point.
+            """,
         ),
     )
