@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -492,13 +492,10 @@ class MOSEKDirect(DirectSolver):
             ptrb = (0,) + ptre[:-1]
             asubs = tuple(itertools.chain.from_iterable(l_ids))
             avals = tuple(itertools.chain.from_iterable(l_coefs))
-            qcsubi = tuple(itertools.chain.from_iterable(q_is))
-            qcsubj = tuple(itertools.chain.from_iterable(q_js))
-            qcval = tuple(itertools.chain.from_iterable(q_vals))
-            qcsubk = tuple(i for i in sub for j in range(len(q_is[i - con_num])))
             self._solver_model.appendcons(num_lq)
             self._solver_model.putarowlist(sub, ptrb, ptre, asubs, avals)
-            self._solver_model.putqcon(qcsubk, qcsubi, qcsubj, qcval)
+            for k, i, j, v in zip(sub, q_is, q_js, q_vals):
+                self._solver_model.putqconk(k, i, j, v)
             self._solver_model.putconboundlist(sub, bound_types, lbs, ubs)
             for i, s_n in enumerate(sub_names):
                 self._solver_model.putconname(sub[i], s_n)
@@ -558,7 +555,7 @@ class MOSEKDirect(DirectSolver):
 
         Parameters
         ----------
-        block: Block (scalar Block or single _BlockData)
+        block: Block (scalar Block or single BlockData)
         """
         var_seq = tuple(
             block.component_data_objects(
@@ -1071,7 +1068,7 @@ class MOSEKDirect(DirectSolver):
         for pyomo_var, mosek_var in self._pyomo_var_to_solver_var_map.items():
             if pyomo_var.value is not None:
                 self._solver_model.putxxslice(
-                    self._whichsol, mosek_var, mosek_var + 1, [(pyomo_var.value)]
+                    self._whichsol, mosek_var, mosek_var + 1, [pyomo_var.value]
                 )
 
         if (self._version[0] > 9) & (self._whichsol == mosek.soltype.itg):

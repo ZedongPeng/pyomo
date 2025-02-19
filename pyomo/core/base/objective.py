@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -9,28 +9,21 @@
 #  This software is distributed under the 3-clause BSD License.
 #  ___________________________________________________________________________
 
-__all__ = (
-    'Objective',
-    'simple_objective_rule',
-    '_ObjectiveData',
-    'minimize',
-    'maximize',
-    'simple_objectivelist_rule',
-    'ObjectiveList',
-)
-
 import sys
 import logging
 from weakref import ref as weakref_ref
 from pyomo.common.pyomo_typing import overload
 
 from pyomo.common.deprecation import RenamedClass
+from pyomo.common.errors import TemplateExpressionError
+from pyomo.common.enums import ObjectiveSense, minimize, maximize
 from pyomo.common.log import is_debug_set
 from pyomo.common.modeling import NOTSET
 from pyomo.common.formatting import tabular_writer
 from pyomo.common.timing import ConstructionTimer
 
 from pyomo.core.expr.numvalue import value
+from pyomo.core.expr.template_expr import templatize_rule
 from pyomo.core.base.component import ActiveComponentData, ModelComponentFactory
 from pyomo.core.base.global_set import UnindexedComponent_index
 from pyomo.core.base.indexed_component import (
@@ -38,16 +31,17 @@ from pyomo.core.base.indexed_component import (
     UnindexedComponent_set,
     rule_wrapper,
 )
-from pyomo.core.base.expression import _ExpressionData, _GeneralExpressionDataImpl
+from pyomo.core.base.expression import NamedExpressionData
 from pyomo.core.base.set import Set
 from pyomo.core.base.initializer import (
     Initializer,
     IndexedCallInitializer,
     CountedCallInitializer,
 )
-from pyomo.core.base import minimize, maximize
 
 logger = logging.getLogger('pyomo.core')
+
+TEMPLATIZE_OBJECTIVES = False
 
 _rule_returned_none_error = """Objective '%s': rule returned None.
 
@@ -65,11 +59,14 @@ def simple_objective_rule(rule):
 
     Example use:
 
-    @simple_objective_rule
-    def O_rule(model, i, j):
-        ...
+    .. code::
 
-    model.o = Objective(rule=simple_objective_rule(...))
+        @simple_objective_rule
+        def O_rule(model, i, j):
+            # ...
+
+        model.o = Objective(rule=simple_objective_rule(...))
+
     """
     return rule_wrapper(rule, {None: Objective.Skip})
 
@@ -82,94 +79,56 @@ def simple_objectivelist_rule(rule):
 
     Example use:
 
-    @simple_objectivelist_rule
-    def O_rule(model, i, j):
-        ...
+    .. code::
 
-    model.o = ObjectiveList(expr=simple_objectivelist_rule(...))
+        @simple_objectivelist_rule
+        def O_rule(model, i, j):
+            # ...
+
+        model.o = ObjectiveList(expr=simple_objectivelist_rule(...))
+
     """
     return rule_wrapper(rule, {None: ObjectiveList.End})
 
 
-#
-# This class is a pure interface
-#
-
-
-class _ObjectiveData(_ExpressionData):
-    """
-    This class defines the data for a single objective.
-
-    Public class attributes:
-        expr            The Pyomo expression for this objective
-        sense           The direction for this objective.
-    """
-
-    __slots__ = ()
-
-    #
-    # Interface
-    #
-
-    def is_minimizing(self):
-        """Return True if this is a minimization objective."""
-        return self.sense == minimize
-
-    #
-    # Abstract Interface
-    #
-
-    @property
-    def sense(self):
-        """Access sense (direction) of this objective."""
-        raise NotImplementedError
-
-    def set_sense(self, sense):
-        """Set the sense (direction) of this objective."""
-        raise NotImplementedError
-
-
-class _GeneralObjectiveData(
-    _GeneralExpressionDataImpl, _ObjectiveData, ActiveComponentData
-):
-    """
-    This class defines the data for a single objective.
+class ObjectiveData(NamedExpressionData, ActiveComponentData):
+    """This class defines the data for a single objective.
 
     Note that this is a subclass of NumericValue to allow
     objectives to be used as part of expressions.
 
-    Constructor arguments:
-        expr            The Pyomo expression stored in this objective.
-        sense           The direction for this objective.
-        component       The Objective object that owns this data.
+    Parameters
+    ----------
+    expr:
+        The Pyomo expression stored in this objective.
 
-    Public class attributes:
-        expr            The Pyomo expression for this objective
-        active          A boolean that is true if this objective is active
-                            in the model.
-        sense           The direction for this objective.
+    sense:
+        The direction for this objective.
 
-    Private class attributes:
-        _component      The objective component.
-        _active         A boolean that indicates whether this data is active
+    component: Objective
+        The Objective object that owns this data.
+
+    Attributes
+    ----------
+    expr:
+        The Pyomo expression for this objective
+
     """
 
-    __slots__ = ("_sense", "_args_")
+    __slots__ = ("_args_", "_sense")
 
     def __init__(self, expr=None, sense=minimize, component=None):
-        _GeneralExpressionDataImpl.__init__(self, expr)
+        # Inlining NamedExpressionData.__init__
+        self._args_ = (expr,)
         # Inlining ActiveComponentData.__init__
         self._component = weakref_ref(component) if (component is not None) else None
         self._index = NOTSET
         self._active = True
-        self._sense = sense
+        self._sense = ObjectiveSense(sense)
 
-        if (self._sense != minimize) and (self._sense != maximize):
-            raise ValueError(
-                "Objective sense must be set to one of "
-                "'minimize' (%s) or 'maximize' (%s). Invalid "
-                "value: %s'" % (minimize, maximize, sense)
-            )
+    def is_minimizing(self):
+        """Return True if this is a minimization objective."""
+        return self.sense == minimize
 
     def set_value(self, expr):
         if expr is None:
@@ -192,14 +151,48 @@ class _GeneralObjectiveData(
 
     def set_sense(self, sense):
         """Set the sense (direction) of this objective."""
-        if sense in {minimize, maximize}:
-            self._sense = sense
-        else:
-            raise ValueError(
-                "Objective sense must be set to one of "
-                "'minimize' (%s) or 'maximize' (%s). Invalid "
-                "value: %s'" % (minimize, maximize, sense)
-            )
+        self._sense = ObjectiveSense(sense)
+
+
+class _ObjectiveData(metaclass=RenamedClass):
+    __renamed__new_class__ = ObjectiveData
+    __renamed__version__ = '6.7.2'
+
+
+class _GeneralObjectiveData(metaclass=RenamedClass):
+    __renamed__new_class__ = ObjectiveData
+    __renamed__version__ = '6.7.2'
+
+
+class TemplateObjectiveData(ObjectiveData):
+    __slots__ = ()
+
+    def __init__(self, template_info, component, index, sense):
+        #
+        # These lines represent in-lining of the
+        # following constructors:
+        #   - ObjectiveData
+        #   - ActiveComponentData
+        #   - ComponentData
+        self._component = component
+        self._active = True
+        self._index = index
+        self._args_ = template_info
+        self._sense = sense
+
+    @property
+    def args(self):
+        # Note that it is faster to just generate the expression from
+        # scratch than it is to clone it and replace the IndexTemplate objects
+        self.set_value(self.parent_component().rule(self.parent_block(), self.index()))
+        return self._args_
+
+    def template_expr(self):
+        return self._args_
+
+    def set_value(self, expr):
+        self.__class__ = ObjectiveData
+        return self.set_value(expr)
 
 
 @ModelComponentFactory.register("Expressions that are minimized or maximized.")
@@ -242,8 +235,6 @@ class Objective(ActiveIndexedComponent):
             A dictionary from the index set to component data objects
         _index
             The set of valid indices
-        _implicit_subsets
-            A tuple of set objects that represents the index set
         _model
             A weakref to the model that owns this component
         _parent
@@ -252,7 +243,7 @@ class Objective(ActiveIndexedComponent):
             The class type for the derived subclass
     """
 
-    _ComponentDataClass = _GeneralObjectiveData
+    _ComponentDataClass = ObjectiveData
     NoObjective = ActiveIndexedComponent.Skip
 
     def __new__(cls, *args, **kwds):
@@ -290,6 +281,10 @@ class Objective(ActiveIndexedComponent):
         if is_debug_set(logger):
             logger.debug("Constructing objective %s" % (self.name))
 
+        if self._anonymous_sets is not None:
+            for _set in self._anonymous_sets:
+                _set.construct()
+
         rule = self.rule
         try:
             # We do not (currently) accept data for constructing Objectives
@@ -321,6 +316,20 @@ class Objective(ActiveIndexedComponent):
                 # indices to be created at a later time).
                 pass
             else:
+                if TEMPLATIZE_OBJECTIVES:
+                    try:
+                        template_info = templatize_rule(block, rule, self.index_set())
+                        comp = weakref_ref(self)
+                        self._data = {
+                            idx: TemplateObjectiveData(
+                                template_info, comp, idx, self._init_sense(block, index)
+                            )
+                            for idx in self.index_set()
+                        }
+                        return
+                    except TemplateExpressionError:
+                        pass
+
                 # Bypass the index validation and create the member directly
                 for index in self.index_set():
                     ans = self._setitem_when_not_present(index, rule(block, index))
@@ -361,11 +370,7 @@ class Objective(ActiveIndexedComponent):
             ],
             self._data.items(),
             ("Active", "Sense", "Expression"),
-            lambda k, v: [
-                v.active,
-                ("minimize" if (v.sense == minimize) else "maximize"),
-                v.expr,
-            ],
+            lambda k, v: [v.active, v.sense, v.expr],
         )
 
     def display(self, prefix="", ostream=None):
@@ -397,14 +402,14 @@ class Objective(ActiveIndexedComponent):
         )
 
 
-class ScalarObjective(_GeneralObjectiveData, Objective):
+class ScalarObjective(ObjectiveData, Objective):
     """
     ScalarObjective is the implementation representing a single,
     non-indexed objective.
     """
 
     def __init__(self, *args, **kwd):
-        _GeneralObjectiveData.__init__(self, expr=None, component=self)
+        ObjectiveData.__init__(self, expr=None, component=self)
         Objective.__init__(self, *args, **kwd)
         self._index = UnindexedComponent_index
 
@@ -440,7 +445,7 @@ class ScalarObjective(_GeneralObjectiveData, Objective):
                     "a sense or expression (there is currently "
                     "no value to return)." % (self.name)
                 )
-            return _GeneralObjectiveData.expr.fget(self)
+            return ObjectiveData.expr.fget(self)
         raise ValueError(
             "Accessing the expression of objective '%s' "
             "before the Objective has been constructed (there "
@@ -463,7 +468,7 @@ class ScalarObjective(_GeneralObjectiveData, Objective):
                     "a sense or expression (there is currently "
                     "no value to return)." % (self.name)
                 )
-            return _GeneralObjectiveData.sense.fget(self)
+            return ObjectiveData.sense.fget(self)
         raise ValueError(
             "Accessing the sense of objective '%s' "
             "before the Objective has been constructed (there "
@@ -482,7 +487,7 @@ class ScalarObjective(_GeneralObjectiveData, Objective):
     # currently in place). So during initialization only, we will
     # treat them as "indexed" objects where things like
     # Objective.Skip are managed. But after that they will behave
-    # like _ObjectiveData objects where set_value does not handle
+    # like ObjectiveData objects where set_value does not handle
     # Objective.Skip but expects a valid expression or None
     #
 
@@ -506,7 +511,7 @@ class ScalarObjective(_GeneralObjectiveData, Objective):
         if self._constructed:
             if len(self._data) == 0:
                 self._data[None] = self
-            return _GeneralObjectiveData.set_sense(self, sense)
+            return ObjectiveData.set_sense(self, sense)
         raise ValueError(
             "Setting the sense of objective '%s' "
             "before the Objective has been constructed (there "
@@ -564,8 +569,7 @@ class ObjectiveList(IndexedObjective):
         _rule = kwargs.pop('rule', None)
         self._starting_index = kwargs.pop('starting_index', 1)
 
-        args = (Set(dimen=1),)
-        super().__init__(*args, **kwargs)
+        super().__init__(Set(dimen=1), **kwargs)
 
         self.rule = Initializer(_rule, allow_generators=True)
         # HACK to make the "counted call" syntax work.  We wait until
@@ -585,7 +589,9 @@ class ObjectiveList(IndexedObjective):
         if is_debug_set(logger):
             logger.debug("Constructing objective list %s" % (self.name))
 
-        self.index_set().construct()
+        if self._anonymous_sets is not None:
+            for _set in self._anonymous_sets:
+                _set.construct()
 
         if self.rule is not None:
             _rule = self.rule(self.parent_block(), ())

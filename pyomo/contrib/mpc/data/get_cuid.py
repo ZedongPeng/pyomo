@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -16,14 +16,13 @@ from pyomo.dae.flatten import get_slice_for_set
 
 
 def get_indexed_cuid(var, sets=None, dereference=None, context=None):
-    """
-    Attempts to convert the provided "var" object into a CUID with
-    with wildcards.
+    """Attempt to convert the provided "var" object into a CUID with wildcards
 
     Arguments
     ---------
     var:
-        Object to process
+        Object to process. May be a VarData, IndexedVar (reference or otherwise),
+        ComponentUID, slice, or string.
     sets: Tuple of sets
         Sets to use if slicing a vardata object
     dereference: None or int
@@ -32,12 +31,14 @@ def get_indexed_cuid(var, sets=None, dereference=None, context=None):
     context: Block
         Block with respect to which slices and CUIDs will be generated
 
+    Returns
+    -------
+    ``ComponentUID``
+        ComponentUID corresponding to the provided ``var`` and sets
+
     """
-    # TODO: Does this function have a good name?
     # Should this function be generalized beyond a single indexing set?
-    if isinstance(var, ComponentUID):
-        return var
-    elif isinstance(var, (str, IndexedComponent_slice)):
+    if isinstance(var, (str, IndexedComponent_slice, ComponentUID)):
         # TODO: Raise error if string and context is None
         return ComponentUID(var, context=context)
     # At this point we are assuming var is a Pyomo Var or VarData object.

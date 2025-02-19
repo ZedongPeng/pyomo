@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -81,11 +81,7 @@ class TestComponentUID(unittest.TestCase):
             ValueError, r"Context 'b\[1,'2'\]' does not apply to component 's'"
         ):
             ComponentUID(self.m.s, context=self.m.b[1, '2'])
-        with self.assertRaisesRegex(
-            ValueError,
-            "Context is not allowed when initializing a ComponentUID "
-            "object from a string type",
-        ):
+        with self.assertRaisesRegex(ValueError, "Context is not allowed"):
             ComponentUID("b[1,2].c.a[2]", context=self.m.b[1, '2'])
 
     def test_parseFromString(self):
@@ -601,31 +597,26 @@ class TestComponentUID(unittest.TestCase):
             ComponentUID.generate_cuid_string_map(model, repr_version=1),
             ComponentUID.generate_cuid_string_map(model),
         )
-        self.assertEqual(len(cuids[0]), 29)
-        self.assertEqual(len(cuids[1]), 29)
+        self.assertEqual(len(cuids[0]), 24)
+        self.assertEqual(len(cuids[1]), 24)
         for obj in [
             model,
             model.x,
             model.y,
-            model.y_index,
             model.y[1],
             model.y[2],
             model.V,
-            model.V_index,
             model.V['a', 'b'],
             model.V[1, '2'],
             model.V[3, 4],
             model.b,
             model.b.z,
-            model.b.z_index,
             model.b.z[1],
             model.b.z['2'],
             getattr(model.b, '.H'),
-            getattr(model.b, '.H_index'),
             getattr(model.b, '.H')['a'],
             getattr(model.b, '.H')[2],
             model.B,
-            model.B_index,
             model.B['a'],
             getattr(model.B['a'], '.k'),
             model.B[2],
@@ -642,23 +633,20 @@ class TestComponentUID(unittest.TestCase):
             ),
             ComponentUID.generate_cuid_string_map(model, descend_into=False),
         )
-        self.assertEqual(len(cuids[0]), 18)
-        self.assertEqual(len(cuids[1]), 18)
+        self.assertEqual(len(cuids[0]), 15)
+        self.assertEqual(len(cuids[1]), 15)
         for obj in [
             model,
             model.x,
             model.y,
-            model.y_index,
             model.y[1],
             model.y[2],
             model.V,
-            model.V_index,
             model.V['a', 'b'],
             model.V[1, '2'],
             model.V[3, 4],
             model.b,
             model.B,
-            model.B_index,
             model.B['a'],
             model.B[2],
             model.component('c tuple')[(1,)],
@@ -1255,6 +1243,26 @@ class TestComponentUID(unittest.TestCase):
             r"with argument \('foo',\)" % (IndexedComponent_slice.del_attribute,),
         ):
             cuid = ComponentUID(_slice)
+
+    def test_cuid_from_cuid(self):
+        def assert_equal(cuid1, cuid2):
+            self.assertEqual(cuid1, cuid2)
+            self.assertFalse(cuid1 is cuid2)
+
+        cuid_str = ComponentUID("b.var[1]")
+        cuid_str_2 = ComponentUID(cuid_str)
+        assert_equal(cuid_str, cuid_str_2)
+
+        cuid_comp = ComponentUID(self.m.b[1, 1].c)
+        cuid_comp_2 = ComponentUID(cuid_comp)
+        assert_equal(cuid_str, cuid_str_2)
+
+        cuid_slice = ComponentUID(self.m.b[1, :].c)
+        cuid_slice_2 = ComponentUID(cuid_slice)
+        assert_equal(cuid_slice, cuid_slice_2)
+
+        with self.assertRaisesRegex(ValueError, "Context is not allowed"):
+            ComponentUID(cuid_comp, context=self.m.b[1, 1])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -98,6 +98,14 @@ class TestKestrel(unittest.TestCase):
         finally:
             pyomo.neos.kestrel.NEOS.host = orig_host
 
+    def test_check_all_ampl_solvers(self):
+        kestrel = kestrelAMPL()
+        solvers = kestrel.getAvailableSolvers()
+        for solver in solvers:
+            name = solver.lower().replace('-', '')
+            if not hasattr(RunAllNEOSSolvers, 'test_' + name):
+                self.fail(f"RunAllNEOSSolvers missing test for '{solver}'")
+
 
 class RunAllNEOSSolvers(object):
     def test_bonmin(self):
@@ -149,8 +157,12 @@ class RunAllNEOSSolvers(object):
     def test_mosek(self):
         self._run('mosek')
 
-    def test_octeract(self):
-        self._run('octeract')
+    # [16 Jul 24]: Octeract is erroring.  We will disable the interface
+    # (and testing) until we have time to resolve #3321
+    # [20 Sep 24]: and appears to have been removed from NEOS
+    #
+    # def test_octeract(self):
+    #     self._run('octeract')
 
     def test_ooqp(self):
         if self.sense == pyo.maximize:
@@ -161,10 +173,10 @@ class RunAllNEOSSolvers(object):
         else:
             self._run('ooqp')
 
-    # The simple tests aren't complementarity
-    # problems
-    # def test_path(self):
-    #    self._run('path')
+    def test_path(self):
+        # The simple tests aren't complementarity
+        # problems
+        self.skipTest("The simple NEOS test is not a complementarity problem")
 
     def test_snopt(self):
         self._run('snopt')

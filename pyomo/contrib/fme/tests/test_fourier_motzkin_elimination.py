@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -435,7 +435,7 @@ class TestFourierMotzkinElimination(unittest.TestCase):
         self.assertIs(body.linear_vars[2], m.startup.binary_indicator_var)
         self.assertEqual(body.linear_coefs[2], 2)
 
-        # 1 <= time1_disjuncts[0].ind_var + time_1.disjuncts[1].ind_var
+        # 1 <= time1_disjuncts[0].ind_var + time1_disjuncts[1].ind_var
         cons = constraints[indices[7]]
         self.assertEqual(cons.lower, 1)
         self.assertIsNone(cons.upper)
@@ -548,12 +548,12 @@ class TestFourierMotzkinElimination(unittest.TestCase):
         # we of course get tremendous amounts of garbage, but we make sure that
         # what should be here is:
         self.check_hull_projected_constraints(
-            m, constraints, [23, 19, 8, 10, 54, 67, 35, 3, 4, 1, 2]
+            m, constraints, [16, 12, 69, 71, 47, 60, 28, 1, 2, 3, 4]
         )
         # and when we filter, it's still there.
         constraints = filtered._pyomo_contrib_fme_transformation.projected_constraints
         self.check_hull_projected_constraints(
-            filtered, constraints, [10, 8, 5, 6, 15, 19, 11, 3, 4, 1, 2]
+            filtered, constraints, [8, 6, 20, 21, 13, 17, 9, 1, 2, 3, 4]
         )
 
     @unittest.skipIf(not 'glpk' in solvers, 'glpk not available')
@@ -562,7 +562,7 @@ class TestFourierMotzkinElimination(unittest.TestCase):
         fme = TransformationFactory('contrib.fourier_motzkin_elimination')
         fme.apply_to(m, vars_to_eliminate=disaggregatedVars, do_integer_arithmetic=True)
         # post-process
-        fme.post_process_fme_constraints(m, SolverFactory('glpk'))
+        fme.post_process_fme_constraints(m, SolverFactory('glpk'), tolerance=-1e-6)
 
         constraints = m._pyomo_contrib_fme_transformation.projected_constraints
         self.assertEqual(len(constraints), 11)
@@ -570,7 +570,7 @@ class TestFourierMotzkinElimination(unittest.TestCase):
         # They should be the same as the above, but now these are *all* the
         # constraints
         self.check_hull_projected_constraints(
-            m, constraints, [10, 8, 5, 6, 15, 19, 11, 3, 4, 1, 2]
+            m, constraints, [8, 6, 20, 21, 13, 17, 9, 1, 2, 3, 4]
         )
 
         # and check that we didn't change the model

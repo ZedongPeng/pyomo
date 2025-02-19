@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -31,8 +31,6 @@ from .base_block import BaseBlockMatrix
 import numpy as np
 from scipy.sparse import coo_matrix
 import operator
-
-__all__ = ['MPIBlockMatrix']
 
 
 def assert_block_structure(mat: MPIBlockMatrix):
@@ -150,14 +148,14 @@ class MPIBlockMatrix(BaseBlockMatrix):
     @property
     def owned_blocks(self):
         """
-        Returns list with inidices of blocks owned by this processor.
+        Returns list with indices of blocks owned by this processor.
         """
         return list(zip(*np.nonzero(self._owned_mask)))
 
     @property
     def shared_blocks(self):
         """
-        Returns list of 2-tuples with inidices of blocks shared by all processors
+        Returns list of 2-tuples with indices of blocks shared by all processors
         """
         return list(zip(*np.nonzero(self._rank_owner < 0)))
 

@@ -1,7 +1,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -76,7 +76,7 @@ LP writer cannot export suffixes to LP files.  Skipping.
         )
 
     def test_deterministic_unordered_sets(self):
-        ref = """\\* Source Pyomo model name=unknown *\\
+        ref = r"""\* Source Pyomo model name=unknown *\
 
 min 
 o:

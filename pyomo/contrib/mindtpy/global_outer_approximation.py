@@ -3,7 +3,7 @@
 #  ___________________________________________________________________________
 #
 #  Pyomo: Python Optimization Modeling Objects
-#  Copyright (c) 2008-2022
+#  Copyright (c) 2008-2024
 #  National Technology and Engineering Solutions of Sandia, LLC
 #  Under the terms of Contract DE-NA0003525 with National Technology and
 #  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
@@ -56,7 +56,7 @@ class MindtPy_GOA_Solver(_MindtPyAlgorithm):
             if config.mip_solver not in {'cplex_persistent', 'gurobi_persistent'}:
                 raise ValueError(
                     "Only cplex_persistent and gurobi_persistent are supported for LP/NLP based Branch and Bound method."
-                    "Please refer to https://pyomo.readthedocs.io/en/stable/contributed_packages/mindtpy.html#lp-nlp-based-branch-and-bound."
+                    "Please refer to https://pyomo.readthedocs.io/en/stable/explanation/solvers/mindtpy.html#lp-nlp-based-branch-and-bound."
                 )
             if config.threads > 1:
                 config.threads = 1
@@ -67,7 +67,7 @@ class MindtPy_GOA_Solver(_MindtPyAlgorithm):
         super().check_config()
 
     def initialize_mip_problem(self):
-        '''Deactivate the nonlinear constraints to create the MIP problem.'''
+        """Deactivate the nonlinear constraints to create the MIP problem."""
         super().initialize_mip_problem()
         self.mip.MindtPy_utils.cuts.aff_cuts = ConstraintList(doc='Affine cuts')
 
@@ -108,4 +108,5 @@ class MindtPy_GOA_Solver(_MindtPyAlgorithm):
             if self.config.use_tabu_list:
                 self.integer_list = self.integer_list[:valid_no_good_cuts_num]
         except KeyError as e:
-            self.config.logger.error(str(e) + '\nDeactivating no-good cuts failed.')
+            self.config.logger.error(e, exc_info=True)
+            self.config.logger.error('Deactivating no-good cuts failed.')
