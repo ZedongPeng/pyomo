@@ -763,7 +763,11 @@ class _MindtPyAlgorithm(object):
 
         if config.use_fbbt:
             with time_code(self.timing, 'presolve - fbbt'):
-                IntervalTightener(max_iter=1000, improvement_tol=1e-8).perform_fbbt(self.working_model)
+                # IntervalTightener(max_iter=1000, improvement_tol=1e-8).perform_fbbt(self.working_model)
+                tightener = IntervalTightener()
+                tightener.config.max_iter = 1000
+                tightener.config.improvement_tol = 1e-8
+                tightener.perform_fbbt(self.working_model)
             # fbbt(model)
             # TODO: logging_level is not logging.INFO here
             config.logger.info('Use the fbbt to tighten the bounds of variables')
