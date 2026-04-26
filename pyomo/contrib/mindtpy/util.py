@@ -535,7 +535,7 @@ def update_solver_timelimit(opt, solver_name, timing, config):
         opt.options['max_cpu_time'] = remaining
     elif solver_name == 'gams':
         opt.options['add_options'].append('option Reslim=%s;' % remaining)
-        if config.nlp_solver_args.get('solver', None) == 'baron':
+        if 'solver' in config.nlp_solver_args and config.nlp_solver_args['solver'] == 'baron':
             add_options = opt.options['add_options']
             for i, line in enumerate(add_options):
                 if line.startswith('MaxTime '):
