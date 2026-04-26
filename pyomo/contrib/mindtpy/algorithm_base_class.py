@@ -1397,10 +1397,6 @@ class _MindtPyAlgorithm(object):
         cb_opt : SolverFactory, optional
             The gurobi_persistent solver, by default None.
 
-        Raises
-        ------
-        ValueError
-            MindtPy unable to handle the NLP subproblem termination condition.
         """
         if termination_condition is tc.maxIterations:
             # TODO try something else? Reinitialize with different initial value?
@@ -1420,10 +1416,19 @@ class _MindtPyAlgorithm(object):
                 )
 
         else:
-            raise ValueError(
+            self.config.logger.error(
                 'MindtPy unable to handle NLP subproblem termination '
                 'condition of {}'.format(termination_condition)
             )
+            self.should_terminate = True
+            self.results.solver.status = SolverStatus.error
+            self.results.solver.termination_condition = termination_condition
+            if (
+                cb_opt is not None
+                and hasattr(cb_opt, '_solver_model')
+                and hasattr(cb_opt._solver_model, 'terminate')
+            ):
+                cb_opt._solver_model.terminate()
 
     def solve_feasibility_subproblem(self):
         """Solves a feasibility NLP if the fixed_nlp problem is infeasible.
@@ -1579,12 +1584,13 @@ class _MindtPyAlgorithm(object):
             True if the algorithm should terminate, False otherwise.
         """
         if self.should_terminate:
-            # self.primal_bound_progress[0] can only be inf or -inf.
-            # If the current primal bound equals inf or -inf, we can infer there is no solution.
-            if self.primal_bound == self.primal_bound_progress[0]:
-                self.results.solver.termination_condition = tc.noSolution
-            else:
-                self.results.solver.termination_condition = tc.feasible
+            if self.results.solver.termination_condition is None:
+                # self.primal_bound_progress[0] can only be inf or -inf.
+                # If the current primal bound equals inf or -inf, we can infer there is no solution.
+                if self.primal_bound == self.primal_bound_progress[0]:
+                    self.results.solver.termination_condition = tc.noSolution
+                else:
+                    self.results.solver.termination_condition = tc.feasible
             return True
         return (
             self.bounds_converged()
