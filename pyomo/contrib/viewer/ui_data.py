@@ -1,4 +1,14 @@
-##############################################################################
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+#
+# This module was originally developed as part of the IDAES PSE Framework
+#
 # Institute for the Design of Advanced Energy Systems Process Systems
 # Engineering Framework (IDAES PSE Framework) Copyright (c) 2018-2019, by the
 # software owners: The Regents of the University of California, through
@@ -7,12 +17,11 @@
 # University Research Corporation, et al. All rights reserved.
 #
 # This software is distributed under the 3-clause BSD License.
-##############################################################################
+# ____________________________________________________________________________________
 
 """
 UI data objects for sharing data and settings between different parts of the UI.
 """
-from __future__ import division, print_function, absolute_import
 
 __author__ = "John Eslick"
 
@@ -23,23 +32,37 @@ import pyomo.environ as pyo
 
 _log = logging.getLogger(__name__)
 
-class UIDataNoUi(object):
+
+class UIDataNoUi:
     """
     This is the UIData object minus the signals.  This is the base class for
     UIData.  The class is split this way for testing when PyQt is not available.
     """
-    def __init__(self, model=None):
+
+    def __init__(self, model=None, model_var_name_in_main=None):
         """
         This class holds the basic UI setup, but doesn't depend on Qt. It
         shouldn't really be used except for testing when Qt is not available.
 
         Args:
             model: The Pyomo model to view
+            model_var_name_in_main: if this is set, check that the model variable
+                which points to a model object in __main__ has the same id when
+                the UI is refreshed due to a command being executed in jupyter
+                notebook or QtConsole, if not the same id, then update the model
+                Since the model viewer is not necessarily pointed at a model in the
+                __main__ namespace only set this if you want the model to auto
+                update.  Since the model selector dialog lets you choose models
+                from the __main__ namespace it sets this when you select a model.
+                This is useful if you run a script repeatedly that replaces a model
+                preventing you from looking at a previous version of the model.
         """
-        super(UIDataNoUi, self).__init__()
+        super().__init__()
         self._model = None
+        self.model_var_name_in_main = model_var_name_in_main
         self._begin_update = False
         self.value_cache = ComponentMap()
+        self.value_cache_units = ComponentMap()
         self.begin_update()
         self.model = model
         self.end_update()
@@ -80,6 +103,7 @@ class UIDataNoUi(object):
     def model(self, value):
         self._model = value
         self.value_cache = ComponentMap()
+        self.value_cache_units = ComponentMap()
         self.emit_update()
 
     def calculate_constraints(self):
@@ -96,24 +120,33 @@ class UIDataNoUi(object):
                 self.value_cache[o] = pyo.value(o, exception=False)
             except ZeroDivisionError:
                 self.value_cache[o] = "Divide_by_0"
+            try:
+                self.value_cache_units[o] = str(pyo.units.get_units(o))
+            except:
+                # If units aren't obtainable for whatever reason, let it go.
+                pass
         self.emit_exec_refresh()
 
-if not qt_available:
+
+if not available:
+
     class UIData(UIDataNoUi):
         pass
-else:
-    class UIData(UIDataNoUi, QtCore.QObject):
-        updated = QtCore.pyqtSignal()
-        exec_refresh = QtCore.pyqtSignal()
-        def __init__(self, *args, **kwargs):
 
+else:
+
+    class UIData(UIDataNoUi, QtCore.QObject):
+        updated = Signal()
+        exec_refresh = Signal()
+
+        def __init__(self, *args, **kwargs):
             """
             This class holds the basic UI setup
 
             Args:
                 model: The Pyomo model to view
             """
-            super(UIData, self).__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs)
 
         def end_update(self, emit=True):
             """
@@ -121,7 +154,7 @@ else:
             are changed and emit update for changes made between begin_update
             and end_update
             """
-            super(UIData, self).end_update(emit=emit)
+            super().end_update(emit=emit)
             if emit:
                 self.emit_update()
 

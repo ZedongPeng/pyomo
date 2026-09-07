@@ -1,3 +1,12 @@
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
 import logging
 
 from pyomo.common import deprecated
@@ -10,13 +19,15 @@ logger = logging.getLogger('pyomo.contrib.preprocessing')
 
 @TransformationFactory.register(
     'core.tighten_constraints_from_vars',
-    doc="[DEPRECATED] Tightens upper and lower bound on linear constraints.")
+    doc="[DEPRECATED] Tightens upper and lower bound on linear constraints.",
+)
 @deprecated(
     "Use of the constraint tightener transformation is deprecated. "
     "Its functionality may be partially replicated using "
     "`pyomo.contrib.fbbt.compute_bounds_on_expr(constraint.body)`.",
-    version='5.7')
-class TightenContraintFromVars(IsomorphicTransformation):
+    version='5.7',
+)
+class TightenConstraintFromVars(IsomorphicTransformation):
     """Tightens upper and lower bound on constraints based on variable bounds.
 
     Iterates through each variable and tightens the constraint bounds using
@@ -27,12 +38,13 @@ class TightenContraintFromVars(IsomorphicTransformation):
     """
 
     def __init__(self):
-        super(TightenContraintFromVars, self).__init__()
+        super(TightenConstraintFromVars, self).__init__()
 
     def _apply_to(self, model):
         """Apply the transformation."""
         for constr in model.component_data_objects(
-                ctype=Constraint, active=True, descend_into=True):
+            ctype=Constraint, active=True, descend_into=True
+        ):
             repn = generate_standard_repn(constr.body)
             if not repn.is_linear():
                 continue
@@ -42,7 +54,7 @@ class TightenContraintFromVars(IsomorphicTransformation):
             if repn.constant:
                 LB = UB = repn.constant
 
-            # loop through each coefficent and variable pair
+            # loop through each coefficient and variable pair
             for var, coef in zip(repn.linear_vars, repn.linear_coefs):
                 # Calculate bounds using interval arithmetic
                 if coef >= 0:
@@ -74,5 +86,6 @@ class TightenContraintFromVars(IsomorphicTransformation):
             if UB < LB:
                 logger.error(
                     "Infeasible variable bounds: "
-                    "Constraint %s has inferred LB %s > UB %s" %
-                    (constr.name, new_lb, new_ub))
+                    "Constraint %s has inferred LB %s > UB %s"
+                    % (constr.name, new_lb, new_ub)
+                )

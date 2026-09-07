@@ -1,333 +1,376 @@
-'''
-Methods for the execution of the grcs algorithm
-'''
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
-from pyomo.core.base import Objective, ConstraintList, Var, Constraint, Block
-from pyomo.opt.results import TerminationCondition
-from pyomo.contrib.pyros import master_problem_methods, separation_problem_methods
-from pyomo.contrib.pyros.solve_data import SeparationProblemData, MasterResult
-from pyomo.contrib.pyros.util import ObjectiveType, get_time_from_solver, pyrosTerminationCondition
-from pyomo.contrib.pyros.util import get_main_elapsed_time, output_logger, coefficient_matching
+"""
+Methods for execution of the main PyROS cutting set algorithm.
+"""
+
+from collections import namedtuple
+
+from pyomo.common.dependencies import numpy as np
+from pyomo.common.collections import ComponentMap
 from pyomo.core.base import value
-from pyomo.common.collections import ComponentSet
 
-def update_grcs_solve_data(pyros_soln, term_cond, nominal_data, timing_data, separation_data, master_soln, k):
-    '''
-    This function updates the results data container object to return to the user so that they have all pertinent
-    information from the PyROS run.
-    :param grcs_soln: PyROS solution data container object
-    :param term_cond: PyROS termination condition
-    :param nominal_data: Contains information on all nominal data (var values, objective)
-    :param timing_data: Contains timing information on subsolver calls in PyROS
-    :param separation_data: Separation model data container
-    :param master_problem_subsolver_statuses: All master problem sub-solver termination conditions from the PyROS run
-    :param separation_problem_subsolver_statuses: All separation problem sub-solver termination conditions from the PyROS run
-    :param k: Iteration counter
-    :return: None
-    '''
-    pyros_soln.pyros_termination_condition = term_cond
-    pyros_soln.total_iters = k
-    pyros_soln.nominal_data = nominal_data
-    pyros_soln.timing_data = timing_data
-    pyros_soln.separation_data = separation_data
-    pyros_soln.master_soln = master_soln
-
-    return
-
-def ROSolver_iterative_solve(model_data, config):
-    '''
-    GRCS algorithm implementation
-    :model_data: ROSolveData object with deterministic model information
-    :config: ConfigBlock for the instance being solved
-    '''
-
-    # === The "violation" e.g. uncertain parameter values added to the master problem are nominal in iteration 0
-    #     User can supply a nominal_uncertain_param_vals if they want to set nominal to a certain point,
-    #     Otherwise, the default init value for the params is used as nominal_uncertain_param_vals
-    violation = list(p for p in config.nominal_uncertain_param_vals)
-
-    # === Do coefficient matching
-    constraints = [c for c in model_data.working_model.component_data_objects(Constraint) if c.equality
-                   and c not in ComponentSet(model_data.working_model.util.decision_rule_eqns)]
-    model_data.working_model.util.h_x_q_constraints = ComponentSet()
-    for c in constraints:
-        coeff_matching_success, robust_infeasible = coefficient_matching(model=model_data.working_model, constraint=c,
-                                                          uncertain_params=model_data.working_model.util.uncertain_params,
-                                                          config=config)
-        if not coeff_matching_success and not robust_infeasible:
-            raise ValueError("Equality constraint \"%s\" cannot be guaranteed to be robustly feasible, "
-                             "given the current partitioning between first-stage, second-stage and state variables. "
-                             "You might consider editing this constraint to reference some second-stage "
-                             "and/or state variable(s)."
-                             % c.name)
-        elif not coeff_matching_success and robust_infeasible:
-            config.progress_logger.info("PyROS has determined that the model is robust infeasible. "
-                                        "One reason for this is that equality constraint \"%s\" cannot be satisfied "
-                                        "against all realizations of uncertainty, "
-                                        "given the current partitioning between first-stage, second-stage and state variables. "
-                                         "You might consider editing this constraint to reference some (additional) second-stage "
-                                         "and/or state variable(s)."
-                                         % c.name)
-            return None, None
-        else:
-            pass
-
-    # h(x,q) == 0 becomes h'(x) == 0
-    for c in model_data.working_model.util.h_x_q_constraints:
-        c.deactivate()
-
-    # === Build the master problem and master problem data container object
-    master_data = master_problem_methods.initial_construct_master(model_data)
-
-    # === If using p_robustness, add ConstraintList for additional constraints
-    if config.p_robustness:
-        master_data.master_model.p_robust_constraints = ConstraintList()
-
-    # === Add scenario_0
-    master_data.master_model.scenarios[0, 0].transfer_attributes_from(master_data.original.clone())
-    if len(master_data.master_model.scenarios[0,0].util.uncertain_params) != len(violation):
-        raise ValueError
+import pyomo.contrib.pyros.master_problem_methods as mp_methods
+import pyomo.contrib.pyros.separation_problem_methods as sp_methods
+from pyomo.contrib.pyros.util import (
+    check_time_limit_reached,
+    ObjectiveType,
+    pyrosTerminationCondition,
+    IterationLogRecord,
+    get_main_elapsed_time,
+    get_dr_var_to_monomial_map,
+)
 
 
-    # === Set the nominal uncertain parameters to the violation values
-    for i, v in enumerate(violation):
-        master_data.master_model.scenarios[0, 0].util.uncertain_params[i].value = v
+class GRCSResults:
+    """
+    Cutting set RO algorithm solve results.
 
-    # === Add objective function (assuming minimization of costs) with nominal second-stage costs
-    if config.objective_focus is ObjectiveType.nominal:
-        master_data.master_model.obj = Objective(
-            expr=master_data.master_model.scenarios[0,0].first_stage_objective +
-                 master_data.master_model.scenarios[0,0].second_stage_objective
+    Attributes
+    ----------
+    master_results : MasterResults
+        Solve results for most recent master problem.
+    separation_results : SeparationResults or None
+        Solve results for separation problem(s) of last iteration.
+        If the separation subroutine was not invoked in the last
+        iteration, then None.
+    pyros_termination_condition : pyrosTerminationCondition
+        PyROS termination condition.
+    iterations : int
+        Number of iterations required.
+    """
+
+    def __init__(
+        self,
+        master_results,
+        separation_results,
+        pyros_termination_condition,
+        iterations,
+    ):
+        self.master_results = master_results
+        self.separation_results = separation_results
+        self.pyros_termination_condition = pyros_termination_condition
+        self.iterations = iterations
+
+
+def _evaluate_shift(current, prev, initial, norm=None):
+    if current.size == 0:
+        return None
+    else:
+        normalizers = np.max(
+            np.vstack((np.ones(initial.size), np.abs(initial))), axis=0
         )
-    elif config.objective_focus is ObjectiveType.worst_case:
-        # === Worst-case cost objective
-        master_data.master_model.zeta = Var(initialize=value(master_data.master_model.scenarios[0, 0].first_stage_objective +
-                                                            master_data.master_model.scenarios[0, 0].second_stage_objective))
-        master_data.master_model.obj = Objective(expr=master_data.master_model.zeta)
-        master_data.master_model.scenarios[0,0].epigraph_constr = Constraint(expr=
-                        master_data.master_model.scenarios[0, 0].first_stage_objective +
-                        master_data.master_model.scenarios[0, 0].second_stage_objective <= master_data.master_model.zeta )
-        master_data.master_model.scenarios[0,0].util.first_stage_variables.append(master_data.master_model.zeta)
+        return np.max(np.abs(current - prev) / normalizers)
 
-    # === Add deterministic constraints to ComponentSet on original so that these become part of separation model
-    master_data.original.util.deterministic_constraints = \
-        ComponentSet(c for c in master_data.original.component_data_objects(Constraint, descend_into=True))
 
-    # === Make separation problem model once before entering the solve loop
-    separation_model = separation_problem_methods.make_separation_problem(model_data=master_data, config=config)
+VariableValueData = namedtuple(
+    "VariableValueData",
+    ("first_stage_variables", "second_stage_variables", "decision_rule_monomials"),
+)
 
-    # === Create separation problem data container object and add information to catalog during solve
-    separation_data = SeparationProblemData()
-    separation_data.separation_model = separation_model
-    separation_data.points_separated = [] # contains last point separated in the separation problem
-    separation_data.points_added_to_master = [config.nominal_uncertain_param_vals] # explicitly robust against in master
-    separation_data.constraint_violations = [] # list of constraint violations for each iteration
-    separation_data.total_global_separation_solves = 0 # number of times global solve is used
-    separation_data.timing = master_data.timing # timing object
 
-    # === Keep track of subsolver termination statuses from each iteration
-    separation_data.separation_problem_subsolver_statuses = []
+def get_variable_value_data(working_blk, dr_var_to_monomial_map):
+    """
+    Get variable value data.
+    """
+    ep = working_blk.effective_var_partitioning
 
-    # === Nominal information
-    nominal_data = Block()
-    nominal_data.nom_fsv_vals = []
-    nominal_data.nom_ssv_vals = []
-    nominal_data.nom_first_stage_cost = 0
-    nominal_data.nom_second_stage_cost = 0
-    nominal_data.nom_obj = 0
+    first_stage_data = ComponentMap(
+        (var, var.value) for var in ep.first_stage_variables
+    )
+    second_stage_data = ComponentMap(
+        (var, var.value) for var in ep.second_stage_variables
+    )
+    dr_term_data = ComponentMap(
+        (dr_var, value(monomial))
+        for dr_var, monomial in get_dr_var_to_monomial_map(working_blk).items()
+    )
 
-    # === Time information
-    timing_data = Block()
-    timing_data.total_master_solve_time = 0
-    timing_data.total_separation_local_time = 0
-    timing_data.total_separation_global_time = 0
-    timing_data.total_dr_polish_time = 0
+    return VariableValueData(
+        first_stage_variables=first_stage_data,
+        second_stage_variables=second_stage_data,
+        decision_rule_monomials=dr_term_data,
+    )
 
-    dr_var_lists_original = []
-    dr_var_lists_polished = []
 
+def evaluate_variable_shifts(current_var_data, previous_var_data, initial_var_data):
+    """
+    Evaluate relative changes in the variable values
+    across solutions to a working model block, such as the
+    nominal master block.
+    """
+    if previous_var_data is None:
+        return None, None, None
+    else:
+        var_shifts = []
+        for attr in current_var_data._fields:
+            var_shifts.append(
+                _evaluate_shift(
+                    current=np.array(list(getattr(current_var_data, attr).values())),
+                    prev=np.array(list(getattr(previous_var_data, attr).values())),
+                    initial=np.array(list(getattr(initial_var_data, attr).values())),
+                )
+            )
+
+    return tuple(var_shifts)
+
+
+def ROSolver_iterative_solve(model_data):
+    """
+    Solve an RO problem with the iterative GRCS algorithm.
+
+    Parameters
+    ----------
+    model_data : model data object
+        Model data object, equipped with the
+        fully preprocessed working model.
+
+    Returns
+    -------
+    GRCSResults
+        Iterative solve results.
+    """
+    config = model_data.config
+    master_data = mp_methods.MasterProblemData(model_data)
+    separation_data = sp_methods.SeparationProblemData(model_data)
+
+    # set up first-stage variable and DR variable sets
+    nominal_master_blk = master_data.master_model.scenarios[0, 0]
+    dr_var_monomial_map = get_dr_var_to_monomial_map(nominal_master_blk)
+
+    # keep track of variable values for iteration logging
+    first_iter_var_data = None
+    previous_iter_var_data = None
+    current_iter_var_data = None
+
+    num_second_stage_ineq_cons = len(
+        separation_data.separation_model.second_stage.inequality_cons
+    )
+    IterationLogRecord.log_header(config.progress_logger.info)
     k = 0
     while config.max_iter == -1 or k < config.max_iter:
         master_data.iteration = k
+        config.progress_logger.debug(f"PyROS working on iteration {k}...")
 
-        # === Add p-robust constraint if iteration > 0
-        if k > 0 and config.p_robustness:
-            master_problem_methods.add_p_robust_constraint(model_data=master_data, config=config)
+        master_soln = master_data.solve_master()
+        master_termination_not_acceptable = master_soln.pyros_termination_condition in {
+            pyrosTerminationCondition.robust_infeasible,
+            pyrosTerminationCondition.time_out,
+            pyrosTerminationCondition.subsolver_error,
+        }
+        if master_termination_not_acceptable:
+            iter_log_record = IterationLogRecord(
+                iteration=k,
+                objective=None,
+                first_stage_var_shift=None,
+                second_stage_var_shift=None,
+                dr_var_shift=None,
+                num_violated_cons=None,
+                max_violation=None,
+                dr_polishing_success=None,
+                all_sep_problems_solved=None,
+                global_separation=None,
+                elapsed_time=get_main_elapsed_time(model_data.timing),
+                master_backup_solver=master_soln.backup_solver_used,
+                master_feasibility_success=master_soln.feasibility_problem_success,
+                separation_backup_local_solver=None,
+                separation_backup_global_solver=None,
+            )
+            iter_log_record.log(config.progress_logger.info)
+            return GRCSResults(
+                master_results=master_soln,
+                separation_results=None,
+                pyros_termination_condition=master_soln.pyros_termination_condition,
+                iterations=k + 1,
+            )
 
-        # === Solve Master Problem
-        config.progress_logger.info("PyROS working on iteration %s..." % k)
-        master_soln = master_problem_methods.solve_master(model_data=master_data, config=config)
-        #config.progress_logger.info("Done solving Master Problem!")
-        master_soln.master_problem_subsolver_statuses = []
+        polishing_successful = True
+        polish_master_solution = (
+            config.decision_rule_order != 0
+            and nominal_master_blk.first_stage.decision_rule_vars
+            and k != 0
+        )
+        if polish_master_solution:
+            _, polishing_successful = master_data.solve_dr_polishing()
 
-        # === Keep track of total time and subsolver termination conditions
-        timing_data.total_master_solve_time += get_time_from_solver(master_soln.results)
-        timing_data.total_master_solve_time += get_time_from_solver(master_soln.feasibility_problem_results)
-
-        master_soln.master_problem_subsolver_statuses.append(master_soln.results.solver.termination_condition)
-
-        # === Check for robust infeasibility or error or time-out in master problem solve
-        if master_soln.master_subsolver_results[1] is pyrosTerminationCondition.robust_infeasible:
-            term_cond = pyrosTerminationCondition.robust_infeasible
-            output_logger(config=config, robust_infeasible=True)
-        elif master_soln.pyros_termination_condition is pyrosTerminationCondition.subsolver_error:
-            term_cond = pyrosTerminationCondition.subsolver_error
-        else:
-            term_cond = None
-        if term_cond == pyrosTerminationCondition.subsolver_error or \
-                term_cond == pyrosTerminationCondition.robust_infeasible:
-            update_grcs_solve_data(pyros_soln=model_data, k=k, term_cond=term_cond,
-                                   nominal_data=nominal_data,
-                                   timing_data=timing_data,
-                                   separation_data=separation_data,
-                                   master_soln=master_soln)
-            return model_data, []
-        # === Check if time limit reached
-        elapsed = get_main_elapsed_time(model_data.timing)
-        if config.time_limit:
-            if elapsed >= config.time_limit:
-                output_logger(config=config, time_out=True, elapsed=elapsed)
-                update_grcs_solve_data(pyros_soln=model_data, k=k, term_cond=pyrosTerminationCondition.time_out,
-                                       nominal_data=nominal_data,
-                                       timing_data=timing_data,
-                                       separation_data=separation_data,
-                                       master_soln=master_soln)
-                return model_data, []
-
-        # === Save nominal information
+        # track variable values
+        current_iter_var_data = get_variable_value_data(
+            nominal_master_blk, dr_var_monomial_map
+        )
         if k == 0:
-            for val in master_soln.fsv_vals:
-                nominal_data.nom_fsv_vals.append(val)
+            first_iter_var_data = current_iter_var_data
+            previous_iter_var_data = None
 
-            for val in master_soln.ssv_vals:
-                nominal_data.nom_ssv_vals.append(val)
+        fsv_shift, ssv_shift, dr_var_shift = evaluate_variable_shifts(
+            current_var_data=current_iter_var_data,
+            previous_var_data=previous_iter_var_data,
+            initial_var_data=first_iter_var_data,
+        )
 
-            nominal_data.nom_first_stage_cost = master_soln.first_stage_objective
-            nominal_data.nom_second_stage_cost = master_soln.second_stage_objective
-            nominal_data.nom_obj = value(master_data.master_model.obj)
-
-
-        if (
-            # === Decision rule polishing (do not polish on first iteration if no ssv or if decision_rule_order = 0)
-            (config.decision_rule_order != 0 and len(config.second_stage_variables) > 0 and k != 0)
-        ):
-            # === Save initial values of DR vars to file
-            for varslist in master_data.master_model.scenarios[0,0].util.decision_rule_vars:
-                vals = []
-                for dvar in varslist.values():
-                    vals.append(dvar.value)
-                dr_var_lists_original.append(vals)
-
-            polishing_results = master_problem_methods.minimize_dr_vars(model_data=master_data, config=config)
-            timing_data.total_dr_polish_time += get_time_from_solver(polishing_results)
-
-            #=== Save after polish
-            for varslist in master_data.master_model.scenarios[0,0].util.decision_rule_vars:
-                vals = []
-                for dvar in varslist.values():
-                    vals.append(dvar.value)
-                dr_var_lists_polished.append(vals)
-
-        # === Set up for the separation problem
-        separation_data.opt_fsv_vals = [v.value for v in master_soln.master_model.scenarios[0,0].util.first_stage_variables]
-        separation_data.opt_ssv_vals = master_soln.ssv_vals
-
-        # === Provide master model scenarios to separation problem for initialization options
-        separation_data.master_scenarios = master_data.master_model.scenarios
-
-        if config.objective_focus is ObjectiveType.worst_case:
-            separation_model.util.zeta = value(master_soln.master_model.obj)
+        # === Check if time limit reached after polishing
+        if check_time_limit_reached(model_data.timing, config):
+            iter_log_record = IterationLogRecord(
+                iteration=k,
+                objective=value(master_data.master_model.epigraph_obj),
+                first_stage_var_shift=fsv_shift,
+                second_stage_var_shift=ssv_shift,
+                dr_var_shift=dr_var_shift,
+                num_violated_cons=None,
+                max_violation=None,
+                dr_polishing_success=polishing_successful,
+                all_sep_problems_solved=None,
+                global_separation=None,
+                elapsed_time=model_data.timing.get_main_elapsed_time(),
+                master_backup_solver=master_soln.backup_solver_used,
+                master_feasibility_success=master_soln.feasibility_problem_success,
+                separation_backup_local_solver=None,
+                separation_backup_global_solver=None,
+            )
+            iter_log_record.log(config.progress_logger.info)
+            return GRCSResults(
+                master_results=master_soln,
+                separation_results=None,
+                pyros_termination_condition=pyrosTerminationCondition.time_out,
+                iterations=k + 1,
+            )
 
         # === Solve Separation Problem
         separation_data.iteration = k
-        separation_data.master_nominal_scenario = master_data.master_model.scenarios[0,0]
-
         separation_data.master_model = master_data.master_model
+        separation_results = separation_data.solve_separation(master_data)
 
-        separation_solns, violating_realizations, constr_violations, is_global, \
-            local_sep_time, global_sep_time = \
-                separation_problem_methods.solve_separation_problem(model_data=separation_data, config=config)
-
-        for sep_soln_list in separation_solns:
-            for s in sep_soln_list:
-                separation_data.separation_problem_subsolver_statuses.append(s.termination_condition)
-
-        if is_global:
-            separation_data.total_global_separation_solves += 1
-
-        timing_data.total_separation_local_time += local_sep_time
-        timing_data.total_separation_global_time += global_sep_time
-
-        separation_data.constraint_violations.append(constr_violations)
-
-
-        if not any(s.found_violation for solve_data_list in separation_solns for s in solve_data_list):
-            separation_data.points_separated = []
+        scaled_violations = [
+            solve_call_res.scaled_violations[con]
+            for con, solve_call_res in separation_results.main_loop_results.solver_call_results.items()
+            if solve_call_res.scaled_violations is not None
+        ]
+        if scaled_violations:
+            max_sep_con_violation = max(scaled_violations)
         else:
-            separation_data.points_separated = violating_realizations
+            max_sep_con_violation = None
+        num_violated_cons = len(separation_results.violated_second_stage_ineq_cons)
 
-        # === Check if time limit reached
-        elapsed = get_main_elapsed_time(model_data.timing)
-        if config.time_limit:
-            if elapsed >= config.time_limit:
-                output_logger(config=config, time_out=True, elapsed=elapsed)
-                termination_condition = pyrosTerminationCondition.time_out
-                update_grcs_solve_data(pyros_soln=model_data, k=k, term_cond=termination_condition,
-                                       nominal_data=nominal_data,
-                                       timing_data=timing_data,
-                                       separation_data=separation_data,
-                                       master_soln=master_soln)
-                return model_data, separation_solns
+        all_sep_problems_solved = (
+            len(scaled_violations) == num_second_stage_ineq_cons
+            and not separation_results.subsolver_error
+            and not separation_results.time_out
+        ) or separation_results.all_discrete_scenarios_exhausted
 
-        # === Check if we exit due to solver returning unsatisfactory statuses (not in permitted_termination_conditions)
-        local_solve_term_conditions = {TerminationCondition.optimal, TerminationCondition.locallyOptimal,
-                                       TerminationCondition.globallyOptimal}
-        global_solve_term_conditions = {TerminationCondition.optimal, TerminationCondition.globallyOptimal}
-        if (is_global and any((s.termination_condition not in global_solve_term_conditions)
-                                  for sep_soln_list in separation_solns for s in sep_soln_list)) or \
-            (not is_global and any((s.termination_condition not in local_solve_term_conditions)
-                                  for sep_soln_list in separation_solns for s in sep_soln_list)):
-            termination_condition = pyrosTerminationCondition.subsolver_error
-            update_grcs_solve_data(pyros_soln=model_data, k=k, term_cond=termination_condition,
-                                   nominal_data=nominal_data,
-                                   timing_data=timing_data,
-                                   separation_data=separation_data,
-                                   master_soln=master_soln)
-            return model_data, separation_solns
+        iter_log_record = IterationLogRecord(
+            iteration=k,
+            objective=value(master_data.master_model.epigraph_obj),
+            first_stage_var_shift=fsv_shift,
+            second_stage_var_shift=ssv_shift,
+            dr_var_shift=dr_var_shift,
+            num_violated_cons=num_violated_cons,
+            max_violation=max_sep_con_violation,
+            dr_polishing_success=polishing_successful,
+            all_sep_problems_solved=all_sep_problems_solved,
+            global_separation=separation_results.solved_globally,
+            elapsed_time=get_main_elapsed_time(model_data.timing),
+            master_backup_solver=master_soln.backup_solver_used,
+            master_feasibility_success=master_soln.feasibility_problem_success,
+            separation_backup_local_solver=separation_results.backup_local_solver_used,
+            separation_backup_global_solver=(
+                separation_results.backup_global_solver_used
+            ),
+        )
 
-        # === Check if we terminate due to robust optimality or feasibility
-        if not any(s.found_violation for sep_soln_list in separation_solns for s in sep_soln_list) and is_global:
-            if config.solve_master_globally and config.objective_focus is ObjectiveType.worst_case:
-                output_logger(config=config, robust_optimal=True)
+        # terminate on time limit
+        if separation_results.time_out or separation_results.subsolver_error:
+            # report PyROS failure to find violated constraint for subsolver error
+            if separation_results.subsolver_error:
+                config.progress_logger.warning(
+                    "PyROS failed to find a constraint violation and "
+                    "will terminate with sub-solver error."
+                )
+
+            pyros_term_cond = (
+                pyrosTerminationCondition.time_out
+                if separation_results.time_out
+                else pyrosTerminationCondition.subsolver_error
+            )
+            iter_log_record.log(config.progress_logger.info)
+            return GRCSResults(
+                master_results=master_soln,
+                separation_results=separation_results,
+                pyros_termination_condition=pyros_term_cond,
+                iterations=k + 1,
+            )
+
+        # === Check if we terminate due to robust optimality or feasibility,
+        #     or in the event of bypassing global separation, no violations
+        robustness_certified = separation_results.robustness_certified
+        if robustness_certified:
+            if config.bypass_global_separation:
+                config.progress_logger.warning(
+                    "Option to bypass global separation was chosen. "
+                    "Robust feasibility and optimality of the reported "
+                    "solution are not guaranteed."
+                )
+            robust_optimal = (
+                config.solve_master_globally
+                and config.objective_focus is ObjectiveType.worst_case
+            )
+            if robust_optimal:
                 termination_condition = pyrosTerminationCondition.robust_optimal
             else:
-                output_logger(config=config, robust_feasible=True)
                 termination_condition = pyrosTerminationCondition.robust_feasible
-            update_grcs_solve_data(pyros_soln=model_data, k=k, term_cond=termination_condition,
-                                   nominal_data=nominal_data,
-                                   timing_data=timing_data,
-                                   separation_data=separation_data,
-                                   master_soln=master_soln)
-            return model_data, separation_solns
+            iter_log_record.log(config.progress_logger.info)
+            return GRCSResults(
+                master_results=master_soln,
+                separation_results=separation_results,
+                pyros_termination_condition=termination_condition,
+                iterations=k + 1,
+            )
 
         # === Add block to master at violation
-        master_problem_methods.add_scenario_to_master(master_data, violating_realizations)
-        separation_data.points_added_to_master.append(violating_realizations)
+        mp_methods.add_scenario_block_to_master_problem(
+            master_model=master_data.master_model,
+            scenario_idx=(k + 1, 0),
+            param_realization=separation_results.violating_param_realization,
+            from_block=nominal_master_blk,
+            clone_first_stage_components=False,
+        )
+
+        separation_data.points_added_to_master[(k + 1, 0)] = (
+            separation_results.violating_param_realization
+        )
+        separation_data.auxiliary_values_for_master_points[(k + 1, 0)] = (
+            separation_results.auxiliary_param_values
+        )
+
+        config.progress_logger.debug("Points added to master:")
+        config.progress_logger.debug(
+            np.array([pt for pt in separation_data.points_added_to_master.values()])
+        )
+
+        # initialize second-stage and state variables
+        # for new master block to separation
+        # solution chosen by heuristic. consequently,
+        # equality constraints should all be satisfied (up to tolerances).
+        for var, val in separation_results.violating_separation_variable_values.items():
+            master_var = master_data.master_model.scenarios[k + 1, 0].find_component(
+                var
+            )
+            master_var.set_value(val)
 
         k += 1
 
-    output_logger(config=config, max_iter=True)
-    update_grcs_solve_data(pyros_soln=model_data, k=k, term_cond=pyrosTerminationCondition.max_iter,
-                           nominal_data=nominal_data,
-                           timing_data=timing_data,
-                           separation_data=separation_data,
-                           master_soln=master_soln)
+        iter_log_record.log(config.progress_logger.info)
+        previous_iter_var_data = current_iter_var_data
 
-    # === In this case we still return the final solution objects for the last iteration
-    return model_data, separation_solns
-
-
-
-
-
-
+    # Iteration limit reached
+    return GRCSResults(
+        master_results=master_soln,
+        separation_results=separation_results,
+        pyros_termination_condition=pyrosTerminationCondition.max_iter,
+        iterations=k,  # iteration count was already incremented
+    )

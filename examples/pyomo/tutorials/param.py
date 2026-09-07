@@ -1,17 +1,16 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 #
 # Imports
 #
-from pyomo.environ import *
+import pyomo.environ as pyo
 
 ##
 ## Setting up a Model
@@ -19,12 +18,12 @@ from pyomo.environ import *
 #
 # Create the model
 #
-model = AbstractModel()
+model = pyo.AbstractModel()
 #
 # Create sets used to define parameters
 #
-model.A = Set()
-model.B = Set()
+model.A = pyo.Set()
+model.B = pyo.Set()
 
 ##
 ## Declaring Params
@@ -33,15 +32,16 @@ model.B = Set()
 #
 # A simple parameter
 #
-model.Z = Param()
+model.Z = pyo.Param()
 #
 # A single-dimension parameter
 #
-model.Y = Param(model.A)
+model.Y = pyo.Param(model.A)
 #
 # Initializing a parameter with two indices
 #
-model.X = Param(model.A,model.B)
+model.X = pyo.Param(model.A, model.B)
+
 
 ##
 ## Parameter Data
@@ -55,34 +55,38 @@ def W_init(model, i, j):
     #
     # Create the value of model.W[i,j]
     #
-    return i*j
-model.W = Param(model.A, model.B, initialize=W_init)
+    return i * j
+
+
+model.W = pyo.Param(model.A, model.B, initialize=W_init)
 #
 # Note that the parameter model.W is not created when this object is
 # constructed.  Instead, W_init() is called during the construction of a
 # problem instance.
 #
 # The _initialize_ option can also be used to specify the values in
-# a parameter.  These default values may be overriden by later construction
+# a parameter.  These default values may be overridden by later construction
 # steps, or by data in an input file:
 #
-V_init={}
-V_init[1]=1
-V_init[2]=2
-V_init[3]=9
-model.V = Param(model.B, initialize=V_init)
+V_init = {}
+V_init[1] = 1
+V_init[2] = 2
+V_init[3] = 9
+model.V = pyo.Param(model.B, initialize=V_init)
 #
 # Note that parameter V is initialized with a dictionary, which maps
 # tuples from parameter indices to parameter values.  Simple, unindexed
 # parameters can be initialized with a scalar value.
 #
-model.U = Param(initialize=9.9)
+model.U = pyo.Param(initialize=9.9)
 #
 # Validation of parameter data is supported in two different ways.  First,
 # the domain of feasible parameter values can be specified with the _within_
 # option:
 #
-model.T = Param(within=model.B)
+model.T = pyo.Param(within=model.B)
+
+
 #
 # Note that the default domain for parameters is Reals, the set of floating
 # point values.
@@ -92,7 +96,9 @@ model.T = Param(within=model.B)
 #
 def S_validate(model, value):
     return value in model.A
-model.S = Param(validate=S_validate)
+
+
+model.S = pyo.Param(validate=S_validate)
 
 ##
 ## Default Values
@@ -102,17 +108,17 @@ model.S = Param(validate=S_validate)
 # example, the instance Param(model.A,model.B) declares a parameter indexed
 # over sets A and B.  However, not all of these values are necessarily
 # declared in a model.  The default value for all parameters not declared
-# is zero. This default can be overriden with the _default_ option.
+# is zero. This default can be overridden with the _default_ option.
 #
 # The following example illustrates how a parameter can be declared where
 # every parameter value is nonzero, but the parameter is stored with a sparse
 # representation.
 #
-R_init={}
-R_init[2,1]=1
-R_init[2,2]=1
-R_init[2,3]=1
-model.R = Param(model.A, model.B, default=99.0, initialize=R_init)
+R_init = {}
+R_init[2, 1] = 1
+R_init[2, 2] = 1
+R_init[2, 3] = 1
+model.R = pyo.Param(model.A, model.B, default=99.0, initialize=R_init)
 #
 # Note that the parameter default value can also be specified in an input
 # file.  See data.dat for an example.
@@ -120,8 +126,8 @@ model.R = Param(model.A, model.B, default=99.0, initialize=R_init)
 # Note that the explicit specification of a zero default changes Pyomo
 # behavior.  For example, consider:
 #
-#   model.a = Param(model.A, default=0.0)
-#   model.b = Param(model.A)
+#   model.a = pyo.Param(model.A, default=0.0)
+#   model.b = pyo.Param(model.A)
 #
 # When model.a[x] is accessed and the index has not been explicitly initialized,
 # the value zero is returned.  This is true whether or not the parameter has

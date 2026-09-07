@@ -1,3 +1,12 @@
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
 import pyomo.kernel as pmo
 
 v = pmo.variable()
@@ -8,7 +17,7 @@ v = pmo.variable()
 
 c = pmo.constraint(v == 1)
 
-c = pmo.constraint(expr= v == 1)
+c = pmo.constraint(expr=v == 1)
 
 c = pmo.constraint(body=v, rhs=1)
 
@@ -22,7 +31,7 @@ c.rhs = 1
 
 c = pmo.constraint(v <= 1)
 
-c = pmo.constraint(expr= v <= 1)
+c = pmo.constraint(expr=v <= 1)
 
 c = pmo.constraint(body=v, ub=1)
 
@@ -32,7 +41,7 @@ c.ub = 1
 
 c = pmo.constraint(v >= 1)
 
-c = pmo.constraint(expr= v >= 1)
+c = pmo.constraint(expr=v >= 1)
 
 c = pmo.constraint(body=v, lb=1)
 
@@ -46,7 +55,7 @@ c.lb = 1
 
 c = pmo.constraint((0, v, 1))
 
-c = pmo.constraint(expr= (0, v, 1))
+c = pmo.constraint(expr=(0, v, 1))
 
 c = pmo.constraint(lb=0, body=v, ub=1)
 

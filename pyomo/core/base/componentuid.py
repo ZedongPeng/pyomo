@@ -1,42 +1,54 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import codecs
 import re
-import ply.lex
+
+import pyomo.tpl.ply.lex as lex
 
 from pyomo.common.collections import ComponentMap
 from pyomo.common.dependencies import pickle
 from pyomo.common.deprecation import deprecated
 from pyomo.core.base.component_namer import (
-    literals, special_chars,
-    name_repr as __name_repr, index_repr as __index_repr,
+    literals,
+    special_chars,
+    name_repr as __name_repr,
+    index_repr as __index_repr,
     re_number as _re_number,
 )
 from pyomo.core.base.indexed_component_slice import IndexedComponent_slice
 from pyomo.core.base.reference import Reference
 
 
-class _NotSpecified(object):
+class _NotSpecified:
     pass
 
+
 def _pickle(x):
-    return '|'+repr(pickle.dumps(x, protocol=2))
+    return '|' + repr(pickle.dumps(x, protocol=2))
+
 
 def _name_repr(x):
     return __name_repr(x, _pickle)
 
+
 def _index_repr(x):
     return __index_repr(x, _pickle)
 
-class ComponentUID(object):
+
+def _context_err(_type):
+    raise ValueError(
+        f"Context is not allowed when initializing a ComponentUID from {_type}."
+    )
+
+
+class ComponentUID:
     """
     A Component unique identifier
 
@@ -55,15 +67,15 @@ class ComponentUID(object):
     indexes)
     """
 
-    __slots__ = ( '_cids', )
+    __slots__ = ('_cids',)
 
     _lex = None
     _repr_v1_map = {
         slice: lambda x: '*',
         Ellipsis.__class__: lambda x: '**',
-        int: lambda x: '#'+str(x),
-        float: lambda x: '#'+str(x),
-        str: lambda x: '$'+str(x),
+        int: lambda x: '#' + str(x),
+        float: lambda x: '#' + str(x),
+        str: lambda x: '$' + str(x),
     }
 
     def __init__(self, component, cuid_buffer=None, context=None):
@@ -71,21 +83,23 @@ class ComponentUID(object):
         # the string representation.
         if isinstance(component, str):
             if context is not None:
-                raise ValueError("Context is not allowed when initializing a "
-                                 "ComponentUID object from a string type")
+                _context_err(str)
             try:
                 self._cids = tuple(self._parse_cuid_v2(component))
             except (OSError, IOError):
                 self._cids = tuple(self._parse_cuid_v1(component))
-
+        elif type(component) is ComponentUID:
+            if context is not None:
+                _context_err(ComponentUID)
+            self._cids = component._cids
         elif type(component) is IndexedComponent_slice:
-            self._cids = tuple(self._generate_cuid_from_slice(
-                component,
-                context=context,
-                ))
+            self._cids = tuple(
+                self._generate_cuid_from_slice(component, context=context)
+            )
         else:
-            self._cids = tuple(self._generate_cuid(
-                component, cuid_buffer=cuid_buffer, context=context))
+            self._cids = tuple(
+                self._generate_cuid(component, cuid_buffer=cuid_buffer, context=context)
+            )
 
     def __str__(self):
         "Return a 'nicely formatted' string representation of the CUID"
@@ -101,29 +115,28 @@ class ComponentUID(object):
 
     def get_repr(self, version=2):
         if version == 1:
-            _unknown = lambda x: '?'+str(x)
+            _unknown = lambda x: '?' + str(x)
             a = ""
             for name, args in self._cids:
                 a += '.' + name
                 if len(args) == 0:
                     continue
                 a += ':' + ','.join(
-                    self._repr_v1_map.get(x.__class__, _unknown)(x)
-                    for x in args)
+                    self._repr_v1_map.get(x.__class__, _unknown)(x) for x in args
+                )
             return a[1:]  # Strip off the leading '.'
         elif version == 2:
             return repr(self)
         else:
-            raise ValueError("Invalid repr version '%s'; expected 1 or 2"
-                             % (version,))
+            raise ValueError("Invalid repr version '%s'; expected 1 or 2" % (version,))
 
     def __getstate__(self):
-        ans = {x:getattr(self, x) for x in ComponentUID.__slots__}
+        ans = {x: getattr(self, x) for x in ComponentUID.__slots__}
         return ans
 
     def __setstate__(self, state):
         for key, val in state.items():
-            setattr(self,key,val)
+            setattr(self, key, val)
 
     def __hash__(self):
         """Return a deterministic hash for this ComponentUID"""
@@ -131,11 +144,22 @@ class ComponentUID(object):
             return hash(self._cids)
         except TypeError:
             # Special handling for unhashable data (slices)
-            return hash(tuple(
-                (name, tuple(
-                    (slice, x.start, x.stop, x.step)
-                    if x.__class__ is slice else x
-                    for x in idx)) for name, idx in self._cids))
+            return hash(
+                tuple(
+                    (
+                        name,
+                        tuple(
+                            (
+                                (slice, x.start, x.stop, x.step)
+                                if x.__class__ is slice
+                                else x
+                            )
+                            for x in idx
+                        ),
+                    )
+                    for name, idx in self._cids
+                )
+            )
 
     def __lt__(self, other):
         """Return True if this CUID <= the 'other' CUID
@@ -155,10 +179,13 @@ class ComponentUID(object):
         try:
             other_cids = other._cids
         except AttributeError:
-            raise TypeError("'<' not supported between instances of "
-                            "'ComponentUID' and '%s'" % (type(other).__name__))
+            raise TypeError(
+                "'<' not supported between instances of "
+                "'ComponentUID' and '%s'" % (type(other).__name__)
+            )
         for (self_name, self_idx), (other_name, other_idx) in zip(
-                self._cids, other_cids):
+            self._cids, other_cids
+        ):
             if self_name != other_name:
                 return self_name < other_name
             for self_i, other_i in zip(self_idx, other_idx):
@@ -216,19 +243,25 @@ class ComponentUID(object):
         return not self.__eq__(other)
 
     @staticmethod
-    def generate_cuid_string_map(block, ctype=None, descend_into=True,
-                                 repr_version=2):
+    def generate_cuid_string_map(block, ctype=None, descend_into=True, repr_version=2):
         def _record_indexed_object_cuid_strings_v1(obj, cuid_str):
-            _unknown = lambda x: '?'+str(x)
+            _unknown = lambda x: '?' + str(x)
             for idx, data in obj.items():
                 if idx.__class__ is tuple and len(idx) > 1:
-                    cuid_strings[data] = cuid_str + ':' + ','.join(
-                        ComponentUID._repr_v1_map.get(x.__class__, _unknown)(x)
-                        for x in idx)
+                    cuid_strings[data] = (
+                        cuid_str
+                        + ':'
+                        + ','.join(
+                            ComponentUID._repr_v1_map.get(x.__class__, _unknown)(x)
+                            for x in idx
+                        )
+                    )
                 else:
-                    cuid_strings[data] \
-                        = cuid_str + ':' + ComponentUID._repr_v1_map.get(
-                            idx.__class__, _unknown)(idx)
+                    cuid_strings[data] = (
+                        cuid_str
+                        + ':'
+                        + ComponentUID._repr_v1_map.get(idx.__class__, _unknown)(idx)
+                    )
 
         def _record_indexed_object_cuid_strings_v2(obj, cuid_str):
             for idx, data in obj.items():
@@ -238,10 +271,7 @@ class ComponentUID(object):
             1: _record_indexed_object_cuid_strings_v1,
             2: _record_indexed_object_cuid_strings_v2,
         }[repr_version]
-        _record_name = {
-            1: str,
-            2: _name_repr,
-        }[repr_version]
+        _record_name = {1: str, 2: _name_repr}[repr_version]
 
         model = block.model()
         cuid_strings = ComponentMap()
@@ -286,7 +316,7 @@ class ComponentUID(object):
 
         # Assume that the keys of fixed, sliced, and ellipsis
         # partition the index we're describing.
-        return tuple( value_map[i] for i in range(len(value_map)) )
+        return tuple(value_map[i] for i in range(len(value_map)))
 
     def _generate_cuid_from_slice(self, _slice, cuid_buffer=None, context=None):
         """
@@ -316,21 +346,24 @@ class ComponentUID(object):
                 if call != IndexedComponent_slice.get_attribute:
                     raise ValueError(
                         "Cannot create a CUID with a __call__ of anything "
-                        "other than a 'component' attribute")
+                        "other than a 'component' attribute"
+                    )
                 if arg != 'component':
                     raise ValueError(
                         "Cannot create a CUID from a slice with a "
                         "call to any method other than 'component': "
-                        "got '%s'." % arg)
+                        "got '%s'." % arg
+                    )
                 arg, name = name, None
 
-            if call & ( IndexedComponent_slice.SET_MASK
-                        | IndexedComponent_slice.DEL_MASK ):
+            if call & (
+                IndexedComponent_slice.SET_MASK | IndexedComponent_slice.DEL_MASK
+            ):
                 raise ValueError(
                     "Cannot create a CUID from a slice that "
                     "contains `set` or `del` calls: got call %s "
                     "with argument %s" % (call, arg)
-                    )
+                )
             elif call == IndexedComponent_slice.slice_info:
                 comp = arg[0]
                 slice_info = arg[1:]
@@ -340,10 +373,8 @@ class ComponentUID(object):
 
                 parent = comp.parent_block()
                 base_cuid = self._generate_cuid(
-                        parent,
-                        cuid_buffer=cuid_buffer,
-                        context=context,
-                        )
+                    parent, cuid_buffer=cuid_buffer, context=context
+                )
                 base_cuid.reverse()
                 rcuid.extend(base_cuid)
                 # We assume slice_info will only occur at the top of the
@@ -352,26 +383,27 @@ class ComponentUID(object):
             elif call == IndexedComponent_slice.get_item:
                 if index is not _NotSpecified:
                     raise ValueError(
-                    "Two `get_item` calls, %s and %s, were detected before a"
-                    "`get_attr` call. This is not supported by 'ComponentUID'."
-                    % (index, arg))
+                        "Two `get_item` calls, %s and %s, were detected before a"
+                        "`get_attr` call. This is not supported by 'ComponentUID'."
+                        % (index, arg)
+                    )
                 # Cache `get_item` arg until a `get_attr` is encountered.
                 index = arg
             elif call == IndexedComponent_slice.call:
                 if len(arg) != 1:
                     raise ValueError(
-                            "Cannot create a CUID from a slice with a "
-                            "call that has multiple arguments: got "
-                            "arguments %s." % (arg,)
-                            )
+                        "Cannot create a CUID from a slice with a "
+                        "call that has multiple arguments: got "
+                        "arguments %s." % (arg,)
+                    )
                 # Cache argument of a call to `component`
                 name = arg[0]
                 if kwds != {}:
                     raise ValueError(
-                            "Cannot create a CUID from a slice with a "
-                            "call that contains keywords: got keyword "
-                            "dict %s." % (kwds,)
-                            )
+                        "Cannot create a CUID from a slice with a "
+                        "call that contains keywords: got keyword "
+                        "dict %s." % (kwds,)
+                    )
             elif call == IndexedComponent_slice.get_attribute:
                 if index is _NotSpecified:
                     index = ()
@@ -391,12 +423,13 @@ class ComponentUID(object):
         rcuid = []
         while component is not context:
             if component is model:
-                raise ValueError("Context '%s' does not apply to component "
-                                 "'%s'" % (context.name,
-                                           orig_component.name))
+                raise ValueError(
+                    "Context '%s' does not apply to component "
+                    "'%s'" % (context.name, orig_component.name)
+                )
             c = component.parent_component()
             if c is component:
-                rcuid.append(( c.local_name, () ))
+                rcuid.append((c.local_name, ()))
             elif cuid_buffer is not None:
                 if id(component) not in cuid_buffer:
                     c_local_name = c.local_name
@@ -423,7 +456,7 @@ class ComponentUID(object):
 
         """
         if ComponentUID._lex is None:
-            ComponentUID._lex = ply.lex.lex()
+            ComponentUID._lex = lex.lex()
 
         name = None
         idx_stack = []
@@ -449,16 +482,16 @@ class ComponentUID(object):
             elif tok.type == ')':
                 tmp = tuple(idx_stack.pop())
                 idx_stack[-1].append(tmp)
-            elif idx_stack: # processing a component index
+            elif idx_stack:  # processing a component index
                 if tok.type == ',':
                     pass
                 elif tok.type == 'STAR':
                     idx_stack[-1].append(tok.value)
                 else:
-                    assert tok.type in {'WORD','STRING','NUMBER','PICKLE'}
+                    assert tok.type in {'WORD', 'STRING', 'NUMBER', 'PICKLE'}
                     idx_stack[-1].append(tok.value)
             else:
-                assert tok.type in {'WORD','STRING'}
+                assert tok.type in {'WORD', 'STRING'}
                 assert name is None
                 name = tok.value
         assert not idx_stack
@@ -475,11 +508,11 @@ class ComponentUID(object):
         cList = label.split('.')
         for c in cList:
             if c[-1] == ']':
-                c_info = c[:-1].split('[',1)
+                c_info = c[:-1].split('[', 1)
             else:
-                c_info = c.split(':',1)
+                c_info = c.split(':', 1)
             if len(c_info) == 1:
-                yield ( c_info[0], tuple() )
+                yield (c_info[0], tuple())
             else:
                 idx = c_info[1].split(',')
                 for i, val in enumerate(idx):
@@ -489,14 +522,14 @@ class ComponentUID(object):
                         idx[i] = str(val[1:])
                     elif val[0] == '#':
                         idx[i] = _int_or_float(val[1:])
-                    elif val[0] in  "\"'" and val[-1] == val[0]:
+                    elif val[0] in "\"'" and val[-1] == val[0]:
                         idx[i] = val[1:-1]
                     elif _re_number.match(val):
                         idx[i] = _int_or_float(val)
                 if len(idx) == 1 and idx[0] == '**':
-                    yield ( c_info[0], (Ellipsis,) )
+                    yield (c_info[0], (Ellipsis,))
                 else:
-                    yield ( c_info[0], tuple(idx) )
+                    yield (c_info[0], tuple(idx))
 
     def _resolve_cuid(self, block):
         obj = block
@@ -516,8 +549,11 @@ class ComponentUID(object):
                 return None
         return obj
 
-    @deprecated("ComponentUID.find_component() is deprecated. "
-                "Use ComponentUID.find_component_on()", version='5.7.2')
+    @deprecated(
+        "ComponentUID.find_component() is deprecated. "
+        "Use ComponentUID.find_component_on()",
+        version='5.7.2',
+    )
     def find_component(self, block):
         return self.find_component_on(block)
 
@@ -577,18 +613,18 @@ class ComponentUID(object):
                 if s_idx_val is Ellipsis:
                     if len(idx) < len(s_idx) - 1:
                         return False
-                    for _k in range(-1, j-len(s_idx), -1):
+                    for _k in range(-1, j - len(s_idx), -1):
                         if s_idx[_k].__class__ is slice:
                             continue
                         elif s_idx[_k] != idx[_k]:
                             return False
-                    # Everything after the elipsis matched, so we can
+                    # Everything after the ellipsis matched, so we can
                     # move on to the next level.
                     break
                 if s_idx_val != idx[j]:
                     return False
         # Matched if all self._cids were consumed
-        return i+1 == len(self._cids)
+        return i + 1 == len(self._cids)
 
 
 def _int_or_float(n):
@@ -599,6 +635,7 @@ def _int_or_float(n):
         _int = 0  # a random int
     return _int if _num == _int else _num
 
+
 # Known escape sequences:
 #   \U{8}: unicode 8-digit hex codes
 #   \u{4}: unicode 4-digit hex codes
@@ -607,11 +644,15 @@ def _int_or_float(n):
 #   \N{...}" unicode by name
 #   \\, \', \", \a, \b, \f, \n, \r, \t, \v
 _re_escape_sequences = re.compile(
-    r"\\U[a-fA-F0-9]{8}|\\u[a-fA-F0-9]{4}|\\x[a-fA-F0-9]{2}" +
-    r"|\\[0-7]{1,3}|\\N\{[^}]+\}|\\[\\'\"abfnrtv]", re.UNICODE | re.VERBOSE)
+    r"\\U[a-fA-F0-9]{8}|\\u[a-fA-F0-9]{4}|\\x[a-fA-F0-9]{2}"
+    + r"|\\[0-7]{1,3}|\\N\{[^}]+\}|\\[\\'\"abfnrtv]",
+    re.UNICODE | re.VERBOSE,
+)
+
 
 def _match_escape(match):
     return codecs.decode(match.group(0), 'unicode-escape')
+
 
 #
 # NOTE: literals and _re_number from component_namer
@@ -621,38 +662,44 @@ def _match_escape(match):
 t_ignore = " \t\r"
 
 tokens = [
-    "WORD",   # unquoted string
-    "STRING", # quoted string
-    "NUMBER", # raw number
-    "STAR",   # either * or **
-    "PICKLE", # a pickled index object
+    "WORD",  # unquoted string
+    "STRING",  # quoted string
+    "NUMBER",  # raw number
+    "STAR",  # either * or **
+    "PICKLE",  # a pickled index object
 ]
+
 
 # Numbers should only appear in getitem lists, so they must be followed
 # by a delimiter token (one of ',]')
-@ply.lex.TOKEN(_re_number.pattern+r'(?=[,\]])')
+@lex.TOKEN(_re_number.pattern + r'(?=[,\]])')
 def t_NUMBER(t):
     t.value = _int_or_float(t.value)
     return t
+
 
 # A "word" must start with an alphanumeric character, followed by any
 # number of "non-special" characters.  This regex matches numbers as
 # well as more traditional string names, so it is important that it is
 # declared *after* t_NUMBER.
-@ply.lex.TOKEN(r'[a-zA-Z_0-9][^' + re.escape(special_chars) + r']*')
+@lex.TOKEN(r'[a-zA-Z_0-9][^' + re.escape(special_chars) + r']*')
 def t_WORD(t):
     t.value = t.value.strip()
     return t
 
+
 # A "string" is a proper quoted string
 _quoted_str = r"'(?:[^'\\]|\\.)*'"
-_general_str = "|".join([_quoted_str, _quoted_str.replace("'",'"')])
-@ply.lex.TOKEN(_general_str)
+_general_str = "|".join([_quoted_str, _quoted_str.replace("'", '"')])
+
+
+@lex.TOKEN(_general_str)
 def t_STRING(t):
     t.value = _re_escape_sequences.sub(_match_escape, t.value[1:-1])
     return t
 
-@ply.lex.TOKEN(r'\*{1,2}')
+
+@lex.TOKEN(r'\*{1,2}')
 def t_STAR(t):
     if len(t.value) == 1:
         t.value = slice(None)
@@ -660,7 +707,8 @@ def t_STAR(t):
         t.value = Ellipsis
     return t
 
-@ply.lex.TOKEN(r'\|b?(?:'+_general_str+")")
+
+@lex.TOKEN(r'\|b?(?:' + _general_str + ")")
 def t_PICKLE(t):
     start = 3 if t.value[1] == 'b' else 2
     unescaped = _re_escape_sequences.sub(_match_escape, t.value[start:-1])
@@ -668,8 +716,10 @@ def t_PICKLE(t):
     t.value = pickle.loads(rawstr)
     return t
 
+
 # Error handling rule
 def t_error(t):
     # Note this parser does not allow "\n", so lexpos is the column number
-    raise IOError("ERROR: Token '%s' Line %s Column %s"
-                  % (t.value, t.lineno, t.lexpos+1))
+    raise IOError(
+        "ERROR: Token '%s' Line %s Column %s" % (t.value, t.lineno, t.lexpos + 1)
+    )

@@ -1,18 +1,24 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import pyomo.kernel as pmo
 from pyomo.core import (
-    ConcreteModel, Var, Objective, Constraint, RangeSet, ConstraintList
+    ConcreteModel,
+    Var,
+    Objective,
+    Constraint,
+    RangeSet,
+    ConstraintList,
 )
+from pyomo.core.expr.relational_expr import EqualityExpression, RangedExpression
 from pyomo.solvers.tests.models.base import _BaseTestModel, register_model
+
 
 @register_model
 class LP_trivial_constraints(_BaseTestModel):
@@ -26,7 +32,7 @@ class LP_trivial_constraints(_BaseTestModel):
 
     def __init__(self):
         _BaseTestModel.__init__(self)
-        self.add_results(self.description+".json")
+        self.add_results(self.description + ".json")
 
     def _generate_model(self):
         self.model = None
@@ -40,33 +46,35 @@ class LP_trivial_constraints(_BaseTestModel):
         model.c = ConstraintList()
         model.c.add(model.x >= -2)
         model.c.add(model.y <= 3)
-        cdata = model.c.add((0, 1, 3))
+        cdata = model.c.add(RangedExpression((0, 1, 3), False))
         assert cdata.lower == 0
         assert cdata.upper == 3
         assert cdata.body() == 1
         assert not cdata.equality
-        cdata = model.c.add((0, 2, 3))
+        cdata = model.c.add(RangedExpression((0, 2, 3), False))
         assert cdata.lower == 0
         assert cdata.upper == 3
         assert cdata.body() == 2
         assert not cdata.equality
-        cdata = model.c.add((0, 1, None))
+        # Note this is a redundant test, left in to preserve the
+        # baseline.  RangedExpression does not manipulate the arguments
+        # like the old tuple notation did.
+        cdata = model.c.add(RangedExpression((None, 0, 1), False))
         assert cdata.lower is None
         assert cdata.upper == 1
         assert cdata.body() == 0
         assert not cdata.equality
-        cdata = model.c.add((None, 0, 1))
+        cdata = model.c.add(RangedExpression((None, 0, 1), False))
         assert cdata.lower is None
         assert cdata.upper == 1
         assert cdata.body() == 0
         assert not cdata.equality
-        cdata = model.c.add((1,1))
+        cdata = model.c.add(EqualityExpression((1, 1)))
         assert cdata.lower == 1
         assert cdata.upper == 1
         assert cdata.body() == 1
         assert cdata.equality
-        model.d = Constraint(
-            rule=lambda m: (float('-inf'), m.x, float('inf')))
+        model.d = Constraint(rule=lambda m: (float('-inf'), m.x, float('inf')))
         assert not model.d.equality
 
     def warmstart_model(self):
@@ -82,12 +90,12 @@ class LP_trivial_constraints(_BaseTestModel):
             assert id(self.model.d[i]) not in symbol_map.byObject
         else:
             for i in self.model.c:
-                tester.assertTrue(id(self.model.c[i]) in symbol_map.byObject)
-            tester.assertTrue(id(self.model.d) not in symbol_map.byObject)
+                tester.assertIn(id(self.model.c[i]), symbol_map.byObject)
+            tester.assertNotIn(id(self.model.d), symbol_map.byObject)
+
 
 @register_model
 class LP_trivial_constraints_kernel(LP_trivial_constraints):
-
     def _generate_model(self):
         self.model = None
         self.model = pmo.block()
@@ -120,7 +128,7 @@ class LP_trivial_constraints_kernel(LP_trivial_constraints):
         assert cdata.ub == 1
         assert cdata.body() == 0
         assert not cdata.equality
-        cdata = model.c[7] = pmo.constraint((1,1))
+        cdata = model.c[7] = pmo.constraint((1, 1))
         assert cdata.lb == 1
         assert cdata.ub == 1
         assert cdata.body() == 1

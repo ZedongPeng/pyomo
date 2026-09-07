@@ -1,38 +1,40 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import logging
 import os
 import subprocess
 import re
-import tempfile
 
 from pyomo.common import Executable
 from pyomo.common.collections import Bunch
 from pyomo.common.tempfiles import TempfileManager
 
 from pyomo.opt.base import ProblemFormat, ResultsFormat, OptSolver
-from pyomo.opt.base.solvers import _extract_version, SolverFactory
+from pyomo.opt.base.solvers import SolverFactory
 from pyomo.opt.results import (
-    SolverResults, Solution, SolverStatus, TerminationCondition,
+    SolverResults,
+    Solution,
+    SolverStatus,
+    TerminationCondition,
     SolutionStatus,
 )
 from pyomo.opt.solver import SystemCallSolver
 
 logger = logging.getLogger('pyomo.solvers')
 
-@SolverFactory.register('baron',  doc='The BARON MINLP solver')
+
+@SolverFactory.register('baron', doc='The BARON MINLP solver')
 class BARONSHELL(SystemCallSolver):
-    """The BARON MINLP solver
-    """
-    _solver_info_cache = {}
+    """The BARON MINLP solver"""
+
+    _solver_info_cache = {None: (None, False)}
 
     def __init__(self, **kwds):
         #
@@ -43,7 +45,7 @@ class BARONSHELL(SystemCallSolver):
 
         self._tim_file = None
 
-        self._valid_problem_formats=[ProblemFormat.bar]
+        self._valid_problem_formats = [ProblemFormat.bar]
         self._valid_result_formats = {}
         self._valid_result_formats[ProblemFormat.bar] = [ResultsFormat.soln]
         self.set_problem_format(ProblemFormat.bar)
@@ -56,8 +58,7 @@ class BARONSHELL(SystemCallSolver):
         self._capabilities.sos1 = False
         self._capabilities.sos2 = False
 
-
-        # CLH: Coppied from cpxlp.py, the cplex file writer.
+        # CLH: Copied from cpxlp.py, the cplex file writer.
         # Keven Hunter made a nice point about using %.16g in his attachment
         # to ticket #4319. I am adjusting this to %.17g as this mocks the
         # behavior of using %r (i.e., float('%r'%<number>) == <number>) with
@@ -71,50 +72,54 @@ class BARONSHELL(SystemCallSolver):
         #               the number's sign.
         self._precision_string = '.17g'
 
-    def _get_dummy_input_files(self, check_license=False):
-        with tempfile.NamedTemporaryFile(mode='w',
-                                         delete=False) as f:
-            # For some reason, if results: 0 is added to the options
-            # section, it causes a file named fort.71 to appear.
-            # So point the ResName option to a temporary file that
-            # we will delete
-            with tempfile.NamedTemporaryFile(mode='w',
-                                             delete=False) as fr:
-                pass
-            # Doing this for the remaining output files as well.
-            # Can't seem to reliably control the files created by
-            # Baron otherwise.
-            with tempfile.NamedTemporaryFile(mode='w',
-                                             delete=False) as fs:
-                pass
-            with tempfile.NamedTemporaryFile(mode='w',
-                                             delete=False) as ft:
-                pass
-            f.write("//This is a dummy .bar file created to "
-                    "return the baron version//\n"
+    def _test_baron_license(self, solver_exec):
+        with TempfileManager as tmp:
+            dname = tmp.mkdtemp()
+            bar = os.path.join(dname, 'test.bar')
+            lst = os.path.join(dname, 'test.lst')
+            with open(bar, 'w') as BAR:
+                BAR.write(
+                    "//Simple model to test license, return version//\n"
                     "OPTIONS {\n"
-                    "results: 1;\n"
-                    "ResName: \""+fr.name+"\";\n"
-                    "summary: 1;\n"
-                    "SumName: \""+fs.name+"\";\n"
+                    "results: 0;\n"
+                    "summary: 0;\n"
                     "times: 1;\n"
-                    "TimName: \""+ft.name+"\";\n"
-                    "}\n")
-            f.write("POSITIVE_VARIABLES ")
-            if check_license:
-                f.write(", ".join("x"+str(i) for i in range(11)))
-            else:
-                f.write("x1")
-            f.write(";\n")
-            f.write("OBJ: minimize x1;")
-        return (f.name, fr.name, fs.name, ft.name)
-
-    def _remove_dummy_input_files(self, fnames):
-        for name in fnames:
+                    f"TimName: \"{lst}\";\n"
+                    "}\n"
+                    "POSITIVE_VARIABLES "
+                )
+                BAR.write(", ".join(f"x{i}" for i in range(11)))
+                BAR.write(";\nOBJ: minimize x0;")
             try:
-                os.remove(name)
+                stdout, stderr = subprocess.Popen(
+                    [solver_exec, bar], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+                ).communicate()
+
             except OSError:
-                pass
+                return None, False
+
+            version = None
+            g = re.search(
+                r'BARON version ([0-9]+)\.([0-9]+)\.([0-9]+)', stdout.decode()
+            )
+            if g:
+                version = tuple(int(i) for i in g.groups())
+
+            if not os.path.exists(lst):
+                return version, False
+
+            with open(lst, 'r') as LST:
+                licensed = LST.read().split()
+            if licensed[7] == '1':
+                licensed = True
+            elif licensed[7] == '11':
+                licensed = False
+            else:
+                raise DeveloperError(
+                    "Unexpected BARON status value (expected 1 or 11, "
+                    f"found {licensed[7]} in times listing {licensed}"
+                )
+        return version, licensed
 
     def license_is_valid(self):
         """Runs a check for a valid Baron license using the
@@ -122,41 +127,18 @@ class BARONSHELL(SystemCallSolver):
         hidden. If the test fails for any reason (including
         the executable being invalid), then this function
         will return False."""
-        solver_exec = self.executable()
-        if (solver_exec, 'licensed') in self._solver_info_cache:
-            return self._solver_info_cache[(solver_exec, 'licensed')]
-
-        if not solver_exec:
-            licensed = False
-        else:
-            fnames= self._get_dummy_input_files(check_license=True)
-            try:
-                process = subprocess.Popen([solver_exec, fnames[0]],
-                                           stdout=subprocess.PIPE,
-                                           stderr=subprocess.STDOUT)
-                stdout, stderr = process.communicate()
-                assert stderr is None
-                rc = 0
-                if process.returncode:
-                    rc = 1
-                else:
-                    stdout = stdout.decode()
-                    if "Continuing in demo mode" in stdout:
-                        rc = 1
-            except OSError:
-                rc = 1
-            finally:
-                self._remove_dummy_input_files(fnames)
-            licensed = not rc
-
-        self._solver_info_cache[(solver_exec, 'licensed')] = licensed
-        return licensed
+        exe = self.executable()
+        if exe not in self._solver_info_cache:
+            self._solver_info_cache[exe] = self._test_baron_license(exe)
+        return self._solver_info_cache[exe][1]
 
     def _default_executable(self):
         executable = Executable("baron")
         if not executable:
-            logger.warning("Could not locate the 'baron' executable, "
-                           "which is required for solver %s" % self.name)
+            logger.warning(
+                "Could not locate the 'baron' executable, "
+                "which is required for solver %s" % self.name
+            )
             self.enable = False
             return None
         return executable.path()
@@ -165,55 +147,30 @@ class BARONSHELL(SystemCallSolver):
         """
         Returns a tuple describing the solver executable version.
         """
-        solver_exec = self.executable()
-        if (solver_exec, 'version') in self._solver_info_cache:
-            return self._solver_info_cache[(solver_exec, 'version')]
-
-        if solver_exec is None:
-            ver = _extract_version('')
-        else:
-            fnames = self._get_dummy_input_files(check_license=False)
-            try:
-                results = subprocess.run([solver_exec, fnames[0]],
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT,
-                                         universal_newlines=True)
-                ver = _extract_version(results.stdout)
-            finally:
-                self._remove_dummy_input_files(fnames)
-
-        self._solver_info_cache[(solver_exec, 'version')] = ver
-        return ver
+        exe = self.executable()
+        if exe not in self._solver_info_cache:
+            self._solver_info_cache[exe] = self._test_baron_license(exe)
+        return self._solver_info_cache[exe][0]
 
     def create_command_line(self, executable, problem_files):
-
         # The solution file is created in the _convert_problem function.
         # The bar file needs the solution filename in the OPTIONS section, but
         # this function is executed after the bar problem file writing.
-        #self._soln_file = pyomo.common.tempfiles.TempfileManager.create_tempfile(suffix = '.baron.sol')
-
+        # self._soln_file = pyomo.common.tempfiles.TempfileManager.create_tempfile(suffix = '.baron.sol')
 
         cmd = [executable, problem_files[0]]
         if self._timer:
             cmd.insert(0, self._timer)
-        return Bunch( cmd=cmd,
-                      log_file=self._log_file,
-                      env=None )
+        return Bunch(cmd=cmd, log_file=self._log_file, env=None)
 
     #
     # Assuming the variable values stored in the model will
     # automatically be included in the Baron input file
     # (returning True implies the opposite and requires another function)
     def warm_start_capable(self):
-
         return False
 
-    def _convert_problem(self,
-                         args,
-                         problem_format,
-                         valid_problem_formats,
-                         **kwds):
-
+    def _convert_problem(self, args, problem_format, valid_problem_formats, **kwds):
         # Baron needs all solver options and file redirections
         # inside the input file, so we need to input those
         # here through io_options before calling the baron writer
@@ -222,22 +179,19 @@ class BARONSHELL(SystemCallSolver):
         # Define log file
         #
         if self._log_file is None:
-            self._log_file = TempfileManager.\
-                            create_tempfile(suffix = '.baron.log')
+            self._log_file = TempfileManager.create_tempfile(suffix='.baron.log')
 
         #
         # Define solution file
         #
         if self._soln_file is None:
-            self._soln_file = TempfileManager.\
-                              create_tempfile(suffix = '.baron.soln')
+            self._soln_file = TempfileManager.create_tempfile(suffix='.baron.soln')
 
-        self._tim_file = TempfileManager.\
-                         create_tempfile(suffix = '.baron.tim')
+        self._tim_file = TempfileManager.create_tempfile(suffix='.baron.tim')
 
         #
         # Create options to send through as io_options
-        # containing all relevent info needed in the Baron file
+        # containing all relevant info needed in the Baron file
         #
         solver_options = {}
         solver_options['ResName'] = self._soln_file
@@ -249,12 +203,13 @@ class BARONSHELL(SystemCallSolver):
                     'Ignoring user-specified option "%s=%s".  This '
                     'option is set to %s, and can be overridden using '
                     'the "solnfile" argument to the solve() method.'
-                    % (key, self.options[key], self._soln_file))
+                    % (key, self.options[key], self._soln_file)
+                )
             elif lower_key == 'timname':
                 logger.warning(
                     'Ignoring user-specified option "%s=%s".  This '
-                    'option is set to %s.'
-                    % (key, self.options[key], self._tim_file))
+                    'option is set to %s.' % (key, self.options[key], self._tim_file)
+                )
             else:
                 solver_options[key] = self.options[key]
 
@@ -264,45 +219,41 @@ class BARONSHELL(SystemCallSolver):
                 break
 
         if 'solver_options' in kwds:
-            raise ValueError("Baron solver options should be set "
-                             "using the options object on this "
-                             "solver plugin. The solver_options "
-                             "I/O options dict for the Baron writer "
-                             "will be populated by this plugin's "
-                             "options object")
+            raise ValueError(
+                "Baron solver options should be set "
+                "using the options object on this "
+                "solver plugin. The solver_options "
+                "I/O options dict for the Baron writer "
+                "will be populated by this plugin's "
+                "options object"
+            )
         kwds['solver_options'] = solver_options
 
-        return OptSolver._convert_problem(self,
-                                          args,
-                                          problem_format,
-                                          valid_problem_formats,
-                                          **kwds)
+        return OptSolver._convert_problem(
+            self, args, problem_format, valid_problem_formats, **kwds
+        )
 
     def process_logfile(self):
-
         results = SolverResults()
 
         #
         # Process logfile
         #
-        OUTPUT = open(self._log_file)
+        cuts = ['Bilinear', 'LD-Envelopes', 'Multilinears', 'Convexity', 'Integrality']
 
         # Collect cut-generation statistics from the log file
-        for line in OUTPUT:
-            if 'Bilinear' in line:
-                results.solver.statistics['Bilinear_cuts'] = int(line.split()[1])
-            elif 'LD-Envelopes' in line:
-                results.solver.statistics['LD-Envelopes_cuts'] = int(line.split()[1])
-            elif 'Multilinears' in line:
-                results.solver.statistics['Multilinears_cuts'] = int(line.split()[1])
-            elif 'Convexity' in line:
-                results.solver.statistics['Convexity_cuts'] = int(line.split()[1])
-            elif 'Integrality' in line:
-                results.solver.statistics['Integrality_cuts'] = int(line.split()[1])
+        with open(self._log_file) as OUTPUT:
+            for line in OUTPUT:
+                for field in cuts:
+                    if field in line:
+                        try:
+                            results.solver.statistics[field + '_cuts'] = int(
+                                line.split()[1]
+                            )
+                        except:
+                            pass
 
-        OUTPUT.close()
         return results
-
 
     def process_soln_file(self, results):
         # check for existence of the solution and time file. Not sure why we
@@ -316,7 +267,7 @@ class BARONSHELL(SystemCallSolver):
             return
 
         with open(self._tim_file, "r") as TimFile:
-            with open(self._soln_file,"r") as INPUT:
+            with open(self._soln_file, "r") as INPUT:
                 self._process_soln_file(results, TimFile, INPUT)
 
     def _process_soln_file(self, results, TimFile, INPUT):
@@ -325,7 +276,7 @@ class BARONSHELL(SystemCallSolver):
         #         was generated by the Pyomo baron_writer plugin, and
         #         that a dummy constraint named c_e_FIX_ONE_VAR_CONST__
         #         was added as the initial constraint in order to
-        #         support trivial constraint equations arrising from
+        #         support trivial constraint equations arising from
         #         fixing pyomo variables. Thus, the dual price solution
         #         information for the first constraint in the solution
         #         file will be excluded from the results object.
@@ -342,15 +293,17 @@ class BARONSHELL(SystemCallSolver):
         extract_price = False
         for suffix in self._suffixes:
             flag = False
-            if re.match(suffix, "rc"): #baron_marginal
+            if re.match(suffix, "rc"):  # baron_marginal
                 extract_marginals = True
                 flag = True
-            if re.match(suffix, "dual"): #baron_price
+            if re.match(suffix, "dual"):  # baron_price
                 extract_price = True
                 flag = True
             if not flag:
-                raise RuntimeError("***The BARON solver plugin cannot"
-                                   "extract solution suffix="+suffix)
+                raise RuntimeError(
+                    "***The BARON solver plugin cannot"
+                    "extract solution suffix=" + suffix
+                )
 
         soln = Solution()
 
@@ -358,11 +311,31 @@ class BARONSHELL(SystemCallSolver):
         # Process model and solver status from the Baron tim file
         #
         line = TimFile.readline().split()
-        results.problem.name = line[0]
-        results.problem.number_of_constraints = int(line[1])
-        results.problem.number_of_variables = int(line[2])
-        results.problem.lower_bound = float(line[5])
-        results.problem.upper_bound = float(line[6])
+        try:
+            # The list of information in the tim file depends on the
+            # BARON version.  As we extract things in order, older
+            # versions of BARON will just result in an IndexError AFTER
+            # we have grabbed all the data that it returns - and we can
+            # safely silently ignore the exception.
+            results.problem.name = line[0]
+            results.problem.number_of_constraints = int(line[1])
+            results.problem.number_of_variables = int(line[2])
+            try:
+                results.problem.lower_bound = float(line[5])
+            except ValueError:
+                results.problem.lower_bound = float("-inf")
+            try:
+                results.problem.upper_bound = float(line[6])
+            except ValueError:
+                results.problem.upper_bound = float("inf")
+            results.problem.missing_bounds = line[9]
+            results.problem.iterations = line[10]
+            results.problem.node_opt = line[11]
+            results.problem.node_memmax = line[12]
+            results.problem.cpu_time = float(line[13])
+            results.problem.wall_time = float(line[14])
+        except IndexError:
+            pass
         soln.gap = results.problem.upper_bound - results.problem.lower_bound
         solver_status = line[7]
         model_status = line[8]
@@ -383,75 +356,72 @@ class BARONSHELL(SystemCallSolver):
         soln.objective[objective_label] = {'Value': None}
         results.problem.number_of_objectives = 1
         if objective is not None:
-            results.problem.sense = \
+            results.problem.sense = (
                 'minimizing' if objective.is_minimizing() else 'maximizing'
+            )
 
         if solver_status == '1':
             results.solver.status = SolverStatus.ok
         elif solver_status == '2':
             results.solver.status = SolverStatus.error
             results.solver.termination_condition = TerminationCondition.error
-            #CLH: I wasn't sure if this was double reporting errors. I
+            # CLH: I wasn't sure if this was double reporting errors. I
             #     just filled in one termination_message for now
-            results.solver.termination_message = \
-                ("Insufficient memory to store the number of nodes required "
-                 "for this seach tree. Increase physical memory or change "
-                 "algorithmic options")
+            results.solver.termination_message = (
+                "Insufficient memory to store the number of nodes required "
+                "for this search tree. Increase physical memory or change "
+                "algorithmic options"
+            )
         elif solver_status == '3':
             results.solver.status = SolverStatus.ok
-            results.solver.termination_condition = \
-                TerminationCondition.maxIterations
+            results.solver.termination_condition = TerminationCondition.maxIterations
         elif solver_status == '4':
             results.solver.status = SolverStatus.ok
-            results.solver.termination_condition = \
-                TerminationCondition.maxTimeLimit
+            results.solver.termination_condition = TerminationCondition.maxTimeLimit
         elif solver_status == '5':
             results.solver.status = SolverStatus.warning
-            results.solver.termination_condition = \
-                TerminationCondition.other
+            results.solver.termination_condition = TerminationCondition.other
         elif solver_status == '6':
             results.solver.status = SolverStatus.aborted
-            results.solver.termination_condition = \
-                TerminationCondition.userInterrupt
+            results.solver.termination_condition = TerminationCondition.userInterrupt
         elif solver_status == '7':
             results.solver.status = SolverStatus.error
-            results.solver.termination_condition = \
-                TerminationCondition.error
+            results.solver.termination_condition = TerminationCondition.error
         elif solver_status == '8':
             results.solver.status = SolverStatus.unknown
-            results.solver.termination_condition = \
-                TerminationCondition.unknown
+            results.solver.termination_condition = TerminationCondition.unknown
         elif solver_status == '9':
             results.solver.status = SolverStatus.error
-            results.solver.termination_condition = \
-                TerminationCondition.solverFailure
+            results.solver.termination_condition = TerminationCondition.solverFailure
         elif solver_status == '10':
             results.solver.status = SolverStatus.error
-            results.solver.termination_condition = \
-                TerminationCondition.error
+            results.solver.termination_condition = TerminationCondition.error
         elif solver_status == '11':
             results.solver.status = SolverStatus.aborted
-            results.solver.termination_condition = \
+            results.solver.termination_condition = (
                 TerminationCondition.licensingProblems
-            results.solver.termination_message = \
+            )
+            results.solver.termination_message = (
                 'Run terminated because of a licensing error.'
+            )
+        else:
+            raise DeveloperError("Unexpected BARON solver status: {solver_status}")
 
         if model_status == '1':
             soln.status = SolutionStatus.optimal
-            results.solver.termination_condition = \
-                TerminationCondition.optimal
+            results.solver.termination_condition = TerminationCondition.optimal
         elif model_status == '2':
             soln.status = SolutionStatus.infeasible
-            results.solver.termination_condition = \
-                TerminationCondition.infeasible
+            results.solver.termination_condition = TerminationCondition.infeasible
         elif model_status == '3':
             soln.status = SolutionStatus.unbounded
-            results.solver.termination_condition = \
-                TerminationCondition.unbounded
+            results.solver.termination_condition = TerminationCondition.unbounded
         elif model_status == '4':
             soln.status = SolutionStatus.feasible
         elif model_status == '5':
             soln.status = SolutionStatus.unknown
+        else:
+            raise DeveloperError("Unexpected BARON model status: {model_status}")
 
         #
         # Process BARON results file
@@ -459,8 +429,7 @@ class BARONSHELL(SystemCallSolver):
 
         # Solutions that were preprocessed infeasible, were aborted,
         # or gave error will not have filled in res.lst files
-        if results.solver.status not in [SolverStatus.error,
-                                         SolverStatus.aborted]:
+        if results.solver.status not in [SolverStatus.error, SolverStatus.aborted]:
             #
             # Extract the solution vector and objective value from BARON
             #
@@ -486,12 +455,13 @@ class BARONSHELL(SystemCallSolver):
                 objective_value = float(INPUT.readline().split()[4])
             except IndexError:
                 # No objective value, so no solution to return
-                if solver_status == '1' and model_status in ('1','4'):
+                if solver_status == '1' and model_status in ('1', '4'):
                     logger.error(
-"""Failed to process BARON solution file: could not extract the final
+                        """Failed to process BARON solution file: could not extract the final
 objective value, but BARON completed normally.  This is indicative of a
 bug in Pyomo's BARON solution parser.  Please report this (along with
-the Pyomo model and BARON version) to the Pyomo Developers.""")
+the Pyomo model and BARON version) to the Pyomo Developers."""
+                    )
                 return
             INPUT.readline()
             INPUT.readline()
@@ -552,7 +522,6 @@ the Pyomo model and BARON version) to the Pyomo Developers.""")
             # filled with variable name, number, and value. Also,
             # optionally fill the baron_marginal suffix
             for i, (label, val) in enumerate(zip(var_name, var_value)):
-
                 soln_variable[label] = {"Value": val}
 
                 # Only adds the baron_marginal key it is requested and exists
@@ -569,14 +538,15 @@ the Pyomo model and BARON version) to the Pyomo Developers.""")
                 #
                 for i, price_val in enumerate(con_price, 1):
                     # use the alias made by the Baron writer
-                    con_label = ".c"+str(i)
+                    con_label = ".c" + str(i)
                     soln_constraint[con_label] = {"dual": price_val}
 
             # This check is necessary because solutions that are
             # preprocessed infeasible have ok solver status, but no
             # objective value located in the res.lst file
-            if not (SolvedDuringPreprocessing and \
-                    soln.status == SolutionStatus.infeasible):
+            if not (
+                SolvedDuringPreprocessing and soln.status == SolutionStatus.infeasible
+            ):
                 soln.objective[objective_label] = {'Value': objective_value}
 
             # Fill the solution for most cases, except errors

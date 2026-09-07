@@ -1,12 +1,11 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import functools
 import inspect
@@ -33,6 +32,7 @@ _disabled_error = (
     "%s.construct()."
 )
 
+
 def _disable_method(fcn, msg=None, exception=RuntimeError):
     _name = fcn.__name__
     if msg is None:
@@ -41,7 +41,7 @@ def _disable_method(fcn, msg=None, exception=RuntimeError):
     # functools.wraps doesn't preserve the function signature until
     # Python 3.4, and even then, does not preserve it accurately (e.g.,
     # calling with the incorrect number of arguments does not generate
-    # an error).  For backwards compatability with Python 2.x, we will
+    # an error).  For backwards compatibility with Python 2.x, we will
     # create a temporary (local) function using exec that matches the
     # function signature passed in and raises an exception
     sig = inspect.signature(fcn)
@@ -94,6 +94,7 @@ def _disable_property(fcn, msg=None, exception=RuntimeError):
 
     return property(fget=getter, fset=setter, doc=fcn.__doc__)
 
+
 def disable_methods(methods):
     """Class decorator to disable methods before construct is called.
 
@@ -104,8 +105,9 @@ def disable_methods(methods):
     restored.  This prevents most class methods from having to begin with
     "`if not self.parent_component()._constructed: raise RuntimeError`"
     """
+
     def class_decorator(cls):
-        assert(len(cls.__bases__) == 1)
+        assert len(cls.__bases__) == 1
         base = cls.__bases__[0]
 
         def construct(self, data=None):
@@ -113,6 +115,7 @@ def disable_methods(methods):
                 self._name = base.__name__
             self.__class__ = base
             return base.construct(self, data)
+
         construct.__doc__ = base.construct.__doc__
         cls.construct = construct
 
@@ -127,7 +130,8 @@ def disable_methods(methods):
             if not hasattr(base, method):
                 raise DeveloperError(
                     "Cannot disable method %s on %s: not present on base class"
-                    % (method, cls))
+                    % (method, cls)
+                )
             base_method = getattr(base, method)
             if type(base_method) is property:
                 setattr(cls, method, _disable_property(base_method, msg, exc))

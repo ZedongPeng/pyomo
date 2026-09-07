@@ -1,23 +1,24 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 from pyomo.core.base.PyomoModel import ConcreteModel
 from pyomo.solvers.plugins.solvers.xpress_direct import XpressDirect
 from pyomo.solvers.plugins.solvers.persistent_solver import PersistentSolver
 from pyomo.core.expr.numvalue import value, is_fixed
-from pyomo.core.expr import current as EXPR
+import pyomo.core.expr as EXPR
 from pyomo.opt.base import SolverFactory
 import collections
 
 
-@SolverFactory.register('xpress_persistent', doc='Persistent python interface to Xpress')
+@SolverFactory.register(
+    'xpress_persistent', doc='Persistent python interface to Xpress'
+)
 class XpressPersistent(PersistentSolver, XpressDirect):
     """
     A class that provides a persistent interface to Xpress. Direct solver interfaces do not use any file io.
@@ -29,7 +30,7 @@ class XpressPersistent(PersistentSolver, XpressDirect):
     Keyword Arguments
     -----------------
     model: ConcreteModel
-        Passing a model to the constructor is equivalent to calling the set_instance mehtod.
+        Passing a model to the constructor is equivalent to calling the set_instance method.
     type: str
         String indicating the class type of the solver instance.
     name: str
@@ -74,7 +75,9 @@ class XpressPersistent(PersistentSolver, XpressDirect):
         elif var.is_continuous():
             vartype = 'C'
         else:
-            raise ValueError('Variable domain type is not recognized for {0}'.format(var.domain))
+            raise ValueError(
+                'Variable domain type is not recognized for {0}'.format(var.domain)
+            )
         return vartype
 
     def update_var(self, var):
@@ -85,37 +88,43 @@ class XpressPersistent(PersistentSolver, XpressDirect):
 
         Parameters
         ----------
-        var: Var (scalar Var or single _VarData)
+        var: Var (scalar Var or single VarData)
 
         """
         # see PR #366 for discussion about handling indexed
         # objects and keeping compatibility with the
         # pyomo.kernel objects
-        #if var.is_indexed():
+        # if var.is_indexed():
         #    for child_var in var.values():
         #        self.update_var(child_var)
         #    return
         if var not in self._pyomo_var_to_solver_var_map:
-            raise ValueError('The Var provided to update_var needs to be added first: {0}'.format(var))
+            raise ValueError(
+                'The Var provided to update_var needs to be added first: {0}'.format(
+                    var
+                )
+            )
         xpress_var = self._pyomo_var_to_solver_var_map[var]
         qctype = self._xpress_chgcoltype_from_var(var)
         lb, ub = self._xpress_lb_ub_from_var(var)
 
-        self._solver_model.chgbounds([xpress_var, xpress_var], ['L', 'U'], [lb, ub])
-        self._solver_model.chgcoltype([xpress_var], [qctype])
+        XpressDirect._chgColType(self, self._solver_model, [xpress_var], [qctype])
+        XpressDirect._chgBounds(
+            self, self._solver_model, [xpress_var, xpress_var], ['L', 'U'], [lb, ub]
+        )
 
     def _add_column(self, var, obj_coef, constraints, coefficients):
         """Add a column to the solver's model
 
         This will add the Pyomo variable var to the solver's
-        model, and put the coefficients on the associated 
+        model, and put the coefficients on the associated
         constraints in the solver model. If the obj_coef is
-        not zero, it will add obj_coef*var to the objective 
+        not zero, it will add obj_coef*var to the objective
         of the solver's model.
 
         Parameters
         ----------
-        var: Var (scalar Var or single _VarData)
+        var: Var (scalar Var or single VarData)
         obj_coef: float
         constraints: list of solver constraints
         coefficients: list of coefficients to put on var in the associated constraint
@@ -126,13 +135,22 @@ class XpressPersistent(PersistentSolver, XpressDirect):
         vartype = self._xpress_chgcoltype_from_var(var)
         lb, ub = self._xpress_lb_ub_from_var(var)
 
-        self._solver_model.addcols(objx=[obj_coef], mstart=[0,len(coefficients)],
-                                    mrwind=constraints, dmatval=coefficients, 
-                                    bdl=[lb], bdu=[ub], names=[varname], 
-                                    types=[vartype])
+        XpressDirect._addCols(
+            self,
+            self._solver_model,
+            objx=[obj_coef],
+            mstart=[0, len(coefficients)],
+            mrwind=constraints,
+            dmatval=coefficients,
+            bdl=[lb],
+            bdu=[ub],
+            names=[varname],
+            types=[vartype],
+        )
 
         xpress_var = self._solver_model.getVariable(
-                        index=self._solver_model.getIndexFromName(type=2, name=varname))
+            index=XpressDirect._getIndex(self, self._solver_model, type=2, name=varname)
+        )
 
         self._pyomo_var_to_solver_var_map[var] = xpress_var
         self._solver_var_to_pyomo_var_map[xpress_var] = var
@@ -140,13 +158,13 @@ class XpressPersistent(PersistentSolver, XpressDirect):
 
     def get_xpress_attribute(self, *args):
         """
-        Get xpress atrributes.
+        Get xpress attributes.
 
         Parameters
         ----------
         control(s): str, strs, list, None
             The xpress attribute to get. Options include any xpress attribute.
-            Can also be list of xpress controls or None for every atrribute
+            Can also be list of xpress controls or None for every attribute
             Please see the Xpress documentation for options.
 
         See the Xpress documentation for xpress.problem.getAttrib for other
@@ -182,7 +200,7 @@ class XpressPersistent(PersistentSolver, XpressDirect):
         ----------
         control(s): str, strs, list, None
             The xpress control to get. Options include any xpress control.
-            Can also be list of xpress controls or None for every contorl
+            Can also be list of xpress controls or None for every control
             Please see the Xpress documentation for options.
 
         See the Xpress documentation for xpress.problem.getControl for other

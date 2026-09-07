@@ -1,26 +1,19 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
-
-
-__all__ = ['AsynchronousSolverManager', 'SolverManagerFactory']
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 from pyomo.common import Factory
 from pyomo.opt.parallel.manager import AsynchronousActionManager
-
-
 
 SolverManagerFactory = Factory('solver manager')
 
 
 class AsynchronousSolverManager(AsynchronousActionManager):
-
     def __init__(self, **kwds):
         AsynchronousActionManager.__init__(self)
 
@@ -59,4 +52,3 @@ class AsynchronousSolverManager(AsynchronousActionManager):
 
     def __exit__(self, t, v, traceback):
         pass
-

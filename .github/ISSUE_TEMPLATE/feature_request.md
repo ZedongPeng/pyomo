@@ -4,6 +4,11 @@ about: Suggest adding an enhancement of a current feature or a new feature in Py
 labels: enhancement
 
 ---
+
+<!-- DO NOT DELETE OR IGNORE THIS TEMPLATE.  Failing to adhere to this template and provide the necessary information may lead to your Issue being closed without consideration. -->
+
+<!-- BEFORE SUBMITTING AN ENHANCEMENT REQUEST - please browse the open issues and the [Archived Design Discussions wiki page](https://github.com/Pyomo/pyomo/wiki/Archived-Design-Discussions).-->
+
 ## Summary
 
 <!-- Please add a concise summary of your suggestion here. -->

@@ -1,56 +1,68 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 #
 # Example 2.1 - Allen Holder
 #
 
-from pyomo.core import *
+import pyomo.environ as pyo
 
 # Instantiate the model
-model = AbstractModel()
+model = pyo.AbstractModel()
 
 # Sets
-model.DoorType = Set()
-model.MachineType = Set()
-model.MarketDoorType1 = Set(within=model.DoorType)
-model.MarketDoorType2 = Set(within=model.DoorType)
+model.DoorType = pyo.Set()
+model.MachineType = pyo.Set()
+model.MarketDoorType1 = pyo.Set(within=model.DoorType)
+model.MarketDoorType2 = pyo.Set(within=model.DoorType)
 
 # Parameters
-model.Hours = Param(model.DoorType, model.MachineType, within=NonNegativeReals)
-model.Labor = Param(model.DoorType, model.MachineType, within=NonNegativeReals)
-model.Profit = Param(model.DoorType, within=NonNegativeReals)
-model.MachineLimit = Param(model.MachineType, within=NonNegativeReals)
-model.LaborLimit = Param(within=NonNegativeReals)
+model.Hours = pyo.Param(model.DoorType, model.MachineType, within=pyo.NonNegativeReals)
+model.Labor = pyo.Param(model.DoorType, model.MachineType, within=pyo.NonNegativeReals)
+model.Profit = pyo.Param(model.DoorType, within=pyo.NonNegativeReals)
+model.MachineLimit = pyo.Param(model.MachineType, within=pyo.NonNegativeReals)
+model.LaborLimit = pyo.Param(within=pyo.NonNegativeReals)
 
 # Variables
-model.NumDoors = Var(model.DoorType, within=NonNegativeIntegers)
+model.NumDoors = pyo.Var(model.DoorType, within=pyo.NonNegativeIntegers)
+
 
 # Objective
 def CalcProfit(M):
-    return sum (M.NumDoors[d]*M.Profit[d] for d in M.DoorType)
-model.TotProf = Objective(rule=CalcProfit, sense=maximize)
+    return sum(M.NumDoors[d] * M.Profit[d] for d in M.DoorType)
+
+
+model.TotProf = pyo.Objective(rule=CalcProfit, sense=pyo.maximize)
+
 
 # Constraints
 def EnsureMachineLimit(M, m):
-    return sum (M.NumDoors[d]*M.Labor[d,m] for d in M.DoorType) \
-           <= M.MachineLimit[m]
-model.MachineUpBound = Constraint(model.MachineType, rule=EnsureMachineLimit)
+    return sum(M.NumDoors[d] * M.Labor[d, m] for d in M.DoorType) <= M.MachineLimit[m]
+
+
+model.MachineUpBound = pyo.Constraint(model.MachineType, rule=EnsureMachineLimit)
+
 
 def EnsureLaborLimit(M):
-    return sum (M.NumDoors[d]*M.Labor[d,m] \
-                for d in M.DoorType for m in M.MachineType) \
-           <= M.LaborLimit
-model.MachineUpBound = Constraint(rule=EnsureLaborLimit)
+    return (
+        sum(M.NumDoors[d] * M.Labor[d, m] for d in M.DoorType for m in M.MachineType)
+        <= M.LaborLimit
+    )
+
+
+model.MachineUpBound = pyo.Constraint(rule=EnsureLaborLimit)
+
 
 def EnsureMarketRatio(M):
-    return sum (M.NumDoors[d] for d in M.MarketDoorType1) \
-           <= sum (M.NumDoors[d] for d in M.MarketDoorType2)
-model.MarketRatio = Constraint(rule=EnsureMarketRatio)
+    return sum(M.NumDoors[d] for d in M.MarketDoorType1) <= sum(
+        M.NumDoors[d] for d in M.MarketDoorType2
+    )
+
+
+model.MarketRatio = pyo.Constraint(rule=EnsureMarketRatio)

@@ -1,3 +1,12 @@
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
 import pyomo.kernel as pmo
 
 #
@@ -8,14 +17,12 @@ v = pmo.variable()
 
 v = pmo.variable(domain=pmo.Reals)
 
-v = pmo.variable(domain=pmo.NonNegativeReals,
-                 ub=10)
+v = pmo.variable(domain=pmo.NonNegativeReals, ub=10)
 
-v = pmo.variable(domain_type=pmo.RealSet,
-                 lb=1)
+v = pmo.variable(domain_type=pmo.RealSet, lb=1)
 
 # error (because domain lower bound is finite)
-#v = pmo.variable(domain=pmo.NonNegativeReals,
+# v = pmo.variable(domain=pmo.NonNegativeReals,
 #                 lb=1)
 
 #
@@ -26,14 +33,12 @@ v = pmo.variable(domain=pmo.Binary)
 
 v = pmo.variable(domain=pmo.Integers)
 
-v = pmo.variable(domain=pmo.NonNegativeIntegers,
-                 ub=10)
+v = pmo.variable(domain=pmo.NonNegativeIntegers, ub=10)
 
-v = pmo.variable(domain_type=pmo.IntegerSet,
-                 lb=1)
+v = pmo.variable(domain_type=pmo.IntegerSet, lb=1)
 
 # error (because domain upper bound is finite)
-#v = pmo.variable(domain=pmo.NegativeIntegers,
+# v = pmo.variable(domain=pmo.NegativeIntegers,
 #                 ub=10)
 
 #

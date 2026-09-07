@@ -1,8 +1,18 @@
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
+from pyomo.contrib.pynumero.linalg.base import DirectLinearSolverInterface
 from abc import ABCMeta, abstractmethod
 import logging
 
 
-class LinearSolverInterface(object, metaclass=ABCMeta):
+class IPLinearSolverInterface(DirectLinearSolverInterface, metaclass=ABCMeta):
     @classmethod
     def getLoggerName(cls):
         return 'linear_solver'
@@ -12,20 +22,8 @@ class LinearSolverInterface(object, metaclass=ABCMeta):
         name = 'interior_point.' + cls.getLoggerName()
         return logging.getLogger(name)
 
-    @abstractmethod
-    def do_symbolic_factorization(self, matrix, raise_on_error=True):
-        pass
-
-    @abstractmethod
-    def do_numeric_factorization(self, matrix, raise_on_error=True):
-        pass
-
     def increase_memory_allocation(self, factor):
         raise NotImplementedError('Should be implemented by base class.')
-
-    @abstractmethod
-    def do_back_solve(self, rhs):
-        pass
 
     @abstractmethod
     def get_inertia(self):

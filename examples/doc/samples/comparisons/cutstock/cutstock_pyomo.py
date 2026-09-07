@@ -1,6 +1,23 @@
-from pyomo.core import *
-import pyomo.opt
-from cutstock_util import*
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
+import pyomo.environ as pyo
+from cutstock_util import (
+    getCutCount,
+    getPatCount,
+    getCuts,
+    getPatterns,
+    getSheetsAvail,
+    getCutDemand,
+    getPriceSheetData,
+    getCutsInPattern,
+)
 
 # Reading in Data using the cutstock_util
 cutcount = getCutCount()
@@ -12,7 +29,7 @@ SheetsAvail = getSheetsAvail()
 CutDemand = getCutDemand()
 CutsInPattern = getCutsInPattern()
 ########################################
-#CutsInPattern = makeDict([Cuts,Patterns],CutsInPattern)
+# CutsInPattern = makeDict([Cuts,Patterns],CutsInPattern)
 tmp = {}
 for i in range(len(Cuts)):
     tmp[Cuts[i]] = {}
@@ -20,39 +37,43 @@ for i in range(len(Cuts)):
         tmp[Cuts[i]][Patterns[j]] = CutsInPattern[i][j]
 CutsInPattern = tmp
 ########################################
-#CutDemand = makeDict([Cuts],CutDemand)
+# CutDemand = makeDict([Cuts],CutDemand)
 tmp = {}
 for i in range(len(Cuts)):
     tmp[Cuts[i]] = CutDemand[i]
 CutDemand = tmp
 
-model = ConcreteModel(name="CutStock Problem")
+model = pyo.ConcreteModel(name="CutStock Problem")
 
-#Defining Variables
-model.SheetsCut = Var()
-model.TotalCost = Var()
-model.PatternCount = Var(Patterns, bounds=(0,None))
-model.ExcessCuts = Var(Cuts, bounds=(0,None))
+# Defining Variables
+model.SheetsCut = pyo.Var()
+model.TotalCost = pyo.Var()
+model.PatternCount = pyo.Var(Patterns, bounds=(0, None))
+model.ExcessCuts = pyo.Var(Cuts, bounds=(0, None))
 
-#objective
-model.objective = Objective(expr=1.0*model.TotalCost)
+# objective
+model.objective = pyo.Objective(expr=1.0 * model.TotalCost)
 
-#Constraints
-model.TotCost = Constraint(expr = model.TotalCost == PriceSheet* model.SheetsCut)
-model.RawAvail = Constraint(expr = model.SheetsCut <= SheetsAvail)
-model.Sheets = Constraint(expr = summation(model.PatternCount) == model.SheetsCut)
-model.CutReq = Constraint(Cuts)
+# Constraints
+model.TotCost = pyo.Constraint(expr=model.TotalCost == PriceSheet * model.SheetsCut)
+model.RawAvail = pyo.Constraint(expr=model.SheetsCut <= SheetsAvail)
+model.Sheets = pyo.Constraint(expr=pyo.summation(model.PatternCount) == model.SheetsCut)
+model.CutReq = pyo.Constraint(Cuts)
 for c in Cuts:
-    model.CutReq.add(c, expr=sum(CutsInPattern[c][p]*model.PatternCount[p] for p in Patterns) == CutDemand[c] + model.ExcessCuts[c])
+    model.CutReq.add(
+        c,
+        expr=sum(CutsInPattern[c][p] * model.PatternCount[p] for p in Patterns)
+        == CutDemand[c] + model.ExcessCuts[c],
+    )
 
 instance = model.create()
-opt = pyomo.opt.SolverFactory('glpk')
+opt = pyo.SolverFactory('glpk')
 results = opt.solve(instance)
 instance.load(results)
 
-print "Status:", results.solver.status
-print "Minimum total cost:", value(instance.objective)
+print("Status:", results.solver.status)
+print("Minimum total cost:", pyo.value(instance.objective))
 for v in instance.variables():
     var = instance.variable(v)
-    if value(var) > 0:
-        print v, "=", value(var)
+    if pyo.value(var) > 0:
+        print(v, "=", pyo.value(var))

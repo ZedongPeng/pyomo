@@ -1,52 +1,58 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import pickle
 
 import pyomo.common.unittest as unittest
-from pyomo.core.expr.numvalue import (NumericValue,
-                                      is_fixed,
-                                      is_constant,
-                                      is_potentially_variable)
-from pyomo.core.tests.unit.kernel.test_dict_container import \
-    _TestActiveDictContainerBase
-from pyomo.core.tests.unit.kernel.test_tuple_container import \
-    _TestActiveTupleContainerBase
-from pyomo.core.tests.unit.kernel.test_list_container import \
-    _TestActiveListContainerBase
+from pyomo.core.expr.numvalue import (
+    NumericValue,
+    is_fixed,
+    is_constant,
+    is_potentially_variable,
+)
+from pyomo.core.tests.unit.kernel.test_dict_container import (
+    _TestActiveDictContainerBase,
+)
+from pyomo.core.tests.unit.kernel.test_tuple_container import (
+    _TestActiveTupleContainerBase,
+)
+from pyomo.core.tests.unit.kernel.test_list_container import (
+    _TestActiveListContainerBase,
+)
 from pyomo.core.kernel.base import ICategorizedObject
 from pyomo.core.kernel.parameter import parameter
-from pyomo.core.kernel.variable import \
-    (IVariable,
-     variable,
-     variable_dict,
-     variable_tuple,
-     variable_list,
-     _extract_domain_type_and_bounds)
+from pyomo.core.kernel.variable import (
+    IVariable,
+    variable,
+    variable_dict,
+    variable_tuple,
+    variable_list,
+    _extract_domain_type_and_bounds,
+)
 from pyomo.core.kernel.block import block
-from pyomo.core.kernel.set_types import (RealSet,
-                                         IntegerSet,
-                                         BooleanSet)
-from pyomo.core.base.set import(Binary,
-                                NonNegativeReals,
-                                NegativeReals,
-                                Reals,
-                                NonNegativeIntegers,
-                                NegativeIntegers,
-                                RealInterval,
-                                IntegerInterval)
+from pyomo.core.kernel.set_types import RealSet, IntegerSet, BooleanSet
+from pyomo.core.base.set import (
+    Binary,
+    NonNegativeReals,
+    NegativeReals,
+    Reals,
+    NonNegativeIntegers,
+    NegativeIntegers,
+    RealInterval,
+    IntegerInterval,
+)
+
 
 class Test_variable(unittest.TestCase):
-
     def test_pprint(self):
         import pyomo.kernel
+
         # Not really testing what the output is, just that
         # an error does not occur. The pprint functionality
         # is still in the early stages.
@@ -81,10 +87,7 @@ class Test_variable(unittest.TestCase):
 
     def test_extract_domain_type_and_bounds(self):
         # test an edge case
-        domain_type, lb, ub = _extract_domain_type_and_bounds(None,
-                                                              None,
-                                                              None,
-                                                              None)
+        domain_type, lb, ub = _extract_domain_type_and_bounds(None, None, None, None)
         self.assertIs(domain_type, RealSet)
         self.assertIs(lb, None)
         self.assertIs(ub, None)
@@ -104,10 +107,7 @@ class Test_variable(unittest.TestCase):
         self.assertIs(type(v)._ctype, IVariable)
 
     def test_pickle(self):
-        v = variable(lb=1,
-                     ub=2,
-                     domain_type=IntegerSet,
-                     fixed=True)
+        v = variable(lb=1, ub=2, domain_type=IntegerSet, fixed=True)
         self.assertEqual(v.lb, 1)
         self.assertEqual(type(v.lb), int)
         self.assertEqual(v.ub, 2)
@@ -115,8 +115,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.domain_type, IntegerSet)
         self.assertEqual(v.fixed, True)
         self.assertEqual(v.parent, None)
-        vup = pickle.loads(
-            pickle.dumps(v))
+        vup = pickle.loads(pickle.dumps(v))
         self.assertEqual(vup.lb, 1)
         self.assertEqual(type(vup.lb), int)
         self.assertEqual(vup.ub, 2)
@@ -127,8 +126,7 @@ class Test_variable(unittest.TestCase):
         b = block()
         b.v = v
         self.assertIs(v.parent, b)
-        bup = pickle.loads(
-            pickle.dumps(b))
+        bup = pickle.loads(pickle.dumps(b))
         vup = bup.v
         self.assertEqual(vup.lb, 1)
         self.assertEqual(vup.ub, 2)
@@ -152,11 +150,7 @@ class Test_variable(unittest.TestCase):
         del b.v
         self.assertTrue(v.parent is None)
 
-        v = variable(domain_type=IntegerSet,
-                     value=1,
-                     lb=0,
-                     ub=2,
-                     fixed=True)
+        v = variable(domain_type=IntegerSet, value=1, lb=0, ub=2, fixed=True)
         self.assertTrue(v.parent is None)
         self.assertEqual(v.ctype, IVariable)
         self.assertEqual(v.domain_type, IntegerSet)
@@ -287,8 +281,8 @@ class Test_variable(unittest.TestCase):
         self.assertIs(v.lower, lb)
         self.assertIs(v.upper, ub)
         with self.assertRaisesRegex(
-                ValueError,
-                'No value for uninitialized NumericValue object None'):
+            ValueError, 'No value for uninitialized parameter object None'
+        ):
             v.bounds
 
         lb = lb**2
@@ -339,8 +333,8 @@ class Test_variable(unittest.TestCase):
         with self.assertRaises(ValueError):
             variable(domain=NegativeIntegers, ub=ub)
 
-        unit_interval = RealInterval(bounds=(0,1))
-        self.assertEqual(unit_interval.bounds(), (0,1))
+        unit_interval = RealInterval(bounds=(0, 1))
+        self.assertEqual(unit_interval.bounds(), (0, 1))
         v = variable(domain=unit_interval)
         self.assertEqual(v.domain_type, RealSet)
         self.assertEqual(v.is_continuous(), True)
@@ -366,8 +360,8 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.ub, 1)
         self.assertEqual(v.bounds, (0, 1))
 
-        binary = IntegerInterval(bounds=(0,1))
-        self.assertEqual(binary.bounds(), (0,1))
+        binary = IntegerInterval(bounds=(0, 1))
+        self.assertEqual(binary.bounds(), (0, 1))
         v = variable(domain=binary)
         self.assertEqual(v.domain_type, IntegerSet)
         self.assertEqual(v.is_continuous(), False)
@@ -396,8 +390,7 @@ class Test_variable(unittest.TestCase):
         variable(domain_type=RealSet)
         variable(domain=Reals)
         with self.assertRaises(ValueError):
-            variable(domain_type=RealSet,
-                     domain=Reals)
+            variable(domain_type=RealSet, domain=Reals)
         with self.assertRaises(ValueError):
             variable(domain_type=BooleanSet)
 
@@ -480,7 +473,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(type(v.lb), int)
         self.assertEqual(v.ub, 1)
         self.assertEqual(type(v.ub), int)
-        self.assertEqual(v.bounds, (0,1))
+        self.assertEqual(v.bounds, (0, 1))
 
         v.lb = 0
         v.ub = 0
@@ -491,7 +484,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), True)
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.ub, 0)
-        self.assertEqual(v.bounds, (0,0))
+        self.assertEqual(v.bounds, (0, 0))
 
         v.lb = 1
         v.ub = 1
@@ -502,7 +495,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), True)
         self.assertEqual(v.lb, 1)
         self.assertEqual(v.ub, 1)
-        self.assertEqual(v.bounds, (1,1))
+        self.assertEqual(v.bounds, (1, 1))
 
         v = variable(domain=Binary)
         self.assertEqual(v.domain_type, IntegerSet)
@@ -512,7 +505,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), True)
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.ub, 1)
-        self.assertEqual(v.bounds, (0,1))
+        self.assertEqual(v.bounds, (0, 1))
 
         v.ub = 2
         self.assertEqual(v.domain_type, IntegerSet)
@@ -522,7 +515,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), True)
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.ub, 2)
-        self.assertEqual(v.bounds, (0,2))
+        self.assertEqual(v.bounds, (0, 2))
 
         v.lb = -1
         self.assertEqual(v.domain_type, IntegerSet)
@@ -532,7 +525,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), True)
         self.assertEqual(v.lb, -1)
         self.assertEqual(v.ub, 2)
-        self.assertEqual(v.bounds, (-1,2))
+        self.assertEqual(v.bounds, (-1, 2))
 
         v.domain = Binary
         self.assertEqual(v.domain_type, IntegerSet)
@@ -542,7 +535,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), True)
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.ub, 1)
-        self.assertEqual(v.bounds, (0,1))
+        self.assertEqual(v.bounds, (0, 1))
 
         v.domain_type = RealSet
         self.assertEqual(v.domain_type, RealSet)
@@ -552,7 +545,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), False)
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.ub, 1)
-        self.assertEqual(v.bounds, (0,1))
+        self.assertEqual(v.bounds, (0, 1))
 
         v.domain_type = IntegerSet
         self.assertEqual(v.domain_type, IntegerSet)
@@ -562,7 +555,7 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_integer(), True)
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.ub, 1)
-        self.assertEqual(v.bounds, (0,1))
+        self.assertEqual(v.bounds, (0, 1))
 
         v.domain = Reals
         self.assertEqual(v.domain_type, RealSet)
@@ -582,9 +575,9 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_discrete(), False)
         self.assertEqual(v.is_binary(), False)
         self.assertEqual(v.is_integer(), False)
-        self.assertEqual(v.lb, float('-inf'))
-        self.assertEqual(v.ub, float('inf'))
-        self.assertEqual(v.bounds, (float('-inf'),float('inf')))
+        self.assertEqual(v.lb, None)
+        self.assertEqual(v.ub, None)
+        self.assertEqual(v.bounds, (None, None))
         self.assertEqual(v.has_lb(), False)
         self.assertEqual(v.has_ub(), False)
 
@@ -667,8 +660,8 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.is_discrete(), True)
         self.assertEqual(v.is_binary(), False)
         self.assertEqual(v.is_integer(), True)
-        self.assertEqual(v.lb, float('-inf'))
-        self.assertEqual(v.ub, float('inf'))
+        self.assertEqual(v.lb, None)
+        self.assertEqual(v.ub, None)
         self.assertEqual(v.has_lb(), False)
         self.assertEqual(v.has_ub(), False)
 
@@ -678,18 +671,18 @@ class Test_variable(unittest.TestCase):
         v.ub = 1
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.ub, 1)
-        self.assertEqual(v.bounds, (0,1))
+        self.assertEqual(v.bounds, (0, 1))
 
         v.bounds = (2, 3)
         self.assertEqual(v.lb, 2)
         self.assertEqual(v.ub, 3)
-        self.assertEqual(v.bounds, (2,3))
+        self.assertEqual(v.bounds, (2, 3))
 
         v.lb = -1
         v.ub = 0
         self.assertEqual(v.lb, -1)
         self.assertEqual(v.ub, 0)
-        self.assertEqual(v.bounds, (-1,0))
+        self.assertEqual(v.bounds, (-1, 0))
 
     def test_has_lb_ub(self):
         v = variable()
@@ -700,21 +693,21 @@ class Test_variable(unittest.TestCase):
 
         v.lb = float('-inf')
         self.assertEqual(v.has_lb(), False)
-        self.assertEqual(v.lb, float('-inf'))
+        self.assertEqual(v.lb, None)
         self.assertEqual(v.has_ub(), False)
         self.assertEqual(v.ub, None)
 
         v.ub = float('inf')
         self.assertEqual(v.has_lb(), False)
-        self.assertEqual(v.lb, float('-inf'))
+        self.assertEqual(v.lb, None)
         self.assertEqual(v.has_ub(), False)
-        self.assertEqual(v.ub, float('inf'))
+        self.assertEqual(v.ub, None)
 
         v.lb = 0
         self.assertEqual(v.has_lb(), True)
         self.assertEqual(v.lb, 0)
         self.assertEqual(v.has_ub(), False)
-        self.assertEqual(v.ub, float('inf'))
+        self.assertEqual(v.ub, None)
 
         v.ub = 0
         self.assertEqual(v.has_lb(), True)
@@ -760,13 +753,13 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(v.fixed, True)
 
         with self.assertRaises(TypeError):
-            v.fix(1,2)
+            v.fix(1, 2)
         self.assertEqual(v.value, 0)
         self.assertEqual(v.fixed, True)
 
         v.free()
         with self.assertRaises(TypeError):
-            v.fix(1,2)
+            v.fix(1, 2)
         self.assertEqual(v.value, 0)
         self.assertEqual(v.fixed, False)
 
@@ -802,7 +795,7 @@ class Test_variable(unittest.TestCase):
         U = 5
 
         # equality
-        x.bounds = L,L
+        x.bounds = L, L
         x.value = 4
         self.assertEqual(x.value, 4)
         self.assertEqual(x.slack, -3)
@@ -1054,23 +1047,25 @@ class Test_variable(unittest.TestCase):
         self.assertEqual(x.lslack, None)
         self.assertEqual(x.uslack, None)
 
+
 class _variable_subclass(variable):
     pass
 
-class Test_variable_dict(_TestActiveDictContainerBase,
-                         unittest.TestCase):
+
+class Test_variable_dict(_TestActiveDictContainerBase, unittest.TestCase):
     _container_type = variable_dict
     _ctype_factory = lambda self: variable()
 
-class Test_variable_tuple(_TestActiveTupleContainerBase,
-                          unittest.TestCase):
+
+class Test_variable_tuple(_TestActiveTupleContainerBase, unittest.TestCase):
     _container_type = variable_tuple
     _ctype_factory = lambda self: variable()
 
-class Test_variable_list(_TestActiveListContainerBase,
-                         unittest.TestCase):
+
+class Test_variable_list(_TestActiveListContainerBase, unittest.TestCase):
     _container_type = variable_list
     _ctype_factory = lambda self: variable()
+
 
 if __name__ == "__main__":
     unittest.main()

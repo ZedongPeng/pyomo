@@ -1,19 +1,18 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 #
-#  This module was originally developed as part of the PyUtilib project
-#  Copyright (c) 2008 Sandia Corporation.
-#  This software is distributed under the BSD License.
-#  Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
-#  the U.S. Government retains certain rights in this software.
-#  ___________________________________________________________________________
+# This module was originally developed as part of the PyUtilib project
+# Copyright (c) 2008 Sandia Corporation.
+# This software is distributed under the BSD License.
+# Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+# the U.S. Government retains certain rights in this software.
+# ____________________________________________________________________________________
 
 import os
 import time
@@ -21,20 +20,18 @@ import tempfile
 import logging
 import shutil
 import weakref
+
+from pyomo.common.dependencies import attempt_import, pyutilib_available
 from pyomo.common.deprecation import deprecated, deprecation_warning
-try:
-    from pyutilib.component.config.tempfiles import (
-        TempfileManager as pyutilib_mngr
-    )
-except ImportError:
-    pyutilib_mngr = None
+from pyomo.common.errors import TempfileContextError
+from pyomo.common.multithread import MultiThreadWrapperWithMain
 
 deletion_errors_are_fatal = True
-
 logger = logging.getLogger(__name__)
+pyutilib_tempfiles, _ = attempt_import('pyutilib.component.config.tempfiles')
 
 
-class TempfileManagerClass(object):
+class TempfileManagerClass:
     """A class for managing tempfile contexts
 
     Pyomo declares a global instance of this class as ``TempfileManager``:
@@ -101,51 +98,71 @@ class TempfileManagerClass(object):
     def shutdown(self, remove=True):
         if not self._context_stack:
             return
-        if any(ctx.tempfiles for ctx in self._context_stack):
-            logger.error(
-                "Temporary files created through TempfileManager "
-                "contexts have not been deleted (observed during "
-                "TempfileManager instance shutdown).\n"
-                "Undeleted entries:\n\t"+ "\n\t".join(
-                    fname if isinstance(fname, str) else fname.decode()
-                    for ctx in self._context_stack
-                    for fd, fname in ctx.tempfiles))
-        if self._context_stack:
-            logger.warning(
-                "TempfileManagerClass instance: un-popped tempfile "
-                "contexts still exist during TempfileManager instance "
-                "shutdown")
+        if logger is not None:
+            if any(ctx.tempfiles for ctx in self._context_stack):
+                logger.error(
+                    "Temporary files created through TempfileManager "
+                    "contexts have not been deleted (observed during "
+                    "TempfileManager instance shutdown).\n"
+                    "Undeleted entries:\n\t"
+                    + "\n\t".join(
+                        fname if isinstance(fname, str) else fname.decode()
+                        for ctx in self._context_stack
+                        for fd, fname in ctx.tempfiles
+                    )
+                )
+            if self._context_stack:
+                logger.warning(
+                    "TempfileManagerClass instance: un-popped tempfile "
+                    "contexts still exist during TempfileManager instance "
+                    "shutdown"
+                )
         self.clear_tempfiles(remove)
         # Delete the stack so that subsequent operations generate an
         # exception
         self._context_stack = None
 
+    def context(self):
+        """Return the current active TempfileContext.
+
+        Raises
+        ------
+        TempfileContextError if there is not a current context."""
+        if not self._context_stack:
+            raise TempfileContextError(
+                "TempfileManager has no currently active context.  "
+                "Create a context (with push() or __enter__()) before "
+                "attempting to create temporary objects."
+            )
+        return self._context_stack[-1]
+
     def create_tempfile(self, suffix=None, prefix=None, text=False, dir=None):
         "Call :meth:`TempfileContext.create_tempfile` on the active context"
-        return self._context_stack[-1].create_tempfile(
-            suffix=suffix, prefix=prefix, text=text, dir=dir)
+        return self.context().create_tempfile(
+            suffix=suffix, prefix=prefix, text=text, dir=dir
+        )
 
     def create_tempdir(self, suffix=None, prefix=None, dir=None):
         "Call :meth:`TempfileContext.create_tempdir` on the active context"
-        return self._context_stack[-1].create_tempdir(
-            suffix=suffix, prefix=prefix, dir=dir)
+        return self.context().create_tempdir(suffix=suffix, prefix=prefix, dir=dir)
 
     def add_tempfile(self, filename, exists=True):
         "Call :meth:`TempfileContext.add_tempfile` on the active context"
-        return self._context_stack[-1].add_tempfile(
-            filename=filename, exists=exists)
+        return self.context().add_tempfile(filename=filename, exists=exists)
 
     def clear_tempfiles(self, remove=True):
         """Delete all temporary files and remove all contexts."""
         while self._context_stack:
             self.pop(remove)
 
-    @deprecated("The TempfileManager.sequential_files() method has been "
-                "removed.  All temporary files are created with guaranteed "
-                "unique names.  Users wishing sequentially numbered files "
-                "should create a temporary (empty) directory using mkdtemp "
-                "/ create_tempdir and place the sequential files within it.",
-                version='6.2')
+    @deprecated(
+        "The TempfileManager.sequential_files() method has been "
+        "removed.  All temporary files are created with guaranteed "
+        "unique names.  Users wishing sequentially numbered files "
+        "should create a temporary (empty) directory using mkdtemp "
+        "/ create_tempdir and place the sequential files within it.",
+        version='6.2',
+    )
     def sequential_files(self, ctr=0):
         pass
 
@@ -204,7 +221,8 @@ class TempfileManagerClass(object):
                 "the TempfileManager stack within a context manager "
                 "(i.e., `with TempfileManager:`) but was not popped "
                 "before the context manager exited.  Popping the "
-                "context to preserve the stack integrity.")
+                "context to preserve the stack integrity."
+            )
 
 
 class TempfileContext:
@@ -233,6 +251,13 @@ class TempfileContext:
         self.manager = weakref.ref(manager)
         self.tempfiles = []
         self.tempdir = None
+        # Create a local reference from the TempfileContext to the os
+        # and shutil modules so that this object is deleted before the
+        # os and shutil modules are deallocated (since
+        # TempfileContext.__del__ can call methods in those modules
+        # through TempfileContext.release()).
+        self.os = os
+        self.shutil = shutil
 
     def __del__(self):
         self.release()
@@ -243,7 +268,7 @@ class TempfileContext:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
 
-    def mkstemp(self, suffix=None, prefix=None, dir=None, text=False):
+    def mkstemp(self, suffix=None, prefix=None, dir=None, text=False, delete=True):
         """Create a unique temporary file using :func:`tempfile.mkstemp`
 
         Parameters are handled as in :func:`tempfile.mkstemp`, with
@@ -262,10 +287,11 @@ class TempfileContext:
         dir = self._resolve_tempdir(dir)
         # Note: ans == (fd, fname)
         ans = tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=dir, text=text)
-        self.tempfiles.append(ans)
+        if delete:
+            self.tempfiles.append(ans)
         return ans
 
-    def mkdtemp(self, suffix=None, prefix=None, dir=None):
+    def mkdtemp(self, suffix=None, prefix=None, dir=None, delete=True):
         """Create a unique temporary directory using :func:`tempfile.mkdtemp`
 
         Parameters are handled as in :func:`tempfile.mkdtemp`, with
@@ -280,7 +306,8 @@ class TempfileContext:
         """
         dir = self._resolve_tempdir(dir)
         dname = tempfile.mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
-        self.tempfiles.append((None, dname))
+        if delete:
+            self.tempfiles.append((None, dname))
         return dname
 
     def gettempdir(self):
@@ -306,9 +333,7 @@ class TempfileContext:
         return dir
 
     def gettempdirb(self):
-        """Same as :meth:`gettempdir()`, but the return value is ``bytes``
-
-        """
+        """Same as :meth:`gettempdir()`, but the return value is ``bytes``"""
         dir = self._resolve_tempdir()
         if dir is None:
             return tempfile.gettempdirb()
@@ -325,9 +350,7 @@ class TempfileContext:
         return tempfile.gettempprefix()
 
     def gettempprefixb(self):
-        """Same as :meth:`gettempprefix()`, but the return value is ``bytes``
-
-        """
+        """Same as :meth:`gettempprefix()`, but the return value is ``bytes``"""
         return tempfile.gettempprefixb()
 
     def create_tempfile(self, suffix=None, prefix=None, text=False, dir=None):
@@ -344,8 +367,7 @@ class TempfileContext:
             The absolute path of the new file.
 
         """
-        fd, fname = self.mkstemp(suffix=suffix, prefix=prefix,
-                                 dir=dir, text=text)
+        fd, fname = self.mkstemp(suffix=suffix, prefix=prefix, dir=dir, text=text)
         os.close(fd)
         self.tempfiles[-1] = (None, fname)
         return fname
@@ -361,9 +383,7 @@ class TempfileContext:
             The absolute path of the new directory.
 
         """
-        dirname = self.mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
-        self.tempfiles[-1] = (None, dirname)
-        return dirname
+        return self.mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
 
     def add_tempfile(self, filename, exists=True):
         """Declare the specified file/directory to be temporary.
@@ -398,11 +418,11 @@ class TempfileContext:
         remove: bool
             If ``True``, delete all managed files / directories
         """
-        if remove:
-            for fd, name in self.tempfiles:
+        if remove and self.tempfiles:
+            for fd, name in reversed(self.tempfiles):
                 if fd is not None:
                     try:
-                        os.close(fd)
+                        self.os.close(fd)
                     except OSError:
                         pass
                 self._remove_filesystem_object(name)
@@ -415,22 +435,27 @@ class TempfileContext:
             return self.tempdir
         elif self.manager().tempdir is not None:
             return self.manager().tempdir
-        elif pyutilib_mngr is not None and pyutilib_mngr.tempdir is not None:
-            deprecation_warning(
-                "The use of the PyUtilib TempfileManager.tempdir "
-                "to specify the default location for Pyomo "
-                "temporary files has been deprecated.  "
-                "Please set TempfileManager.tempdir in "
-                "pyomo.common.tempfiles", version='5.7.2')
-            return pyutilib_mngr.tempdir
+        elif TempfileManager.main_thread.tempdir is not None:
+            return TempfileManager.main_thread.tempdir
+        elif pyutilib_available:
+            if pyutilib_tempfiles.TempfileManager.tempdir is not None:
+                deprecation_warning(
+                    "The use of the PyUtilib TempfileManager.tempdir "
+                    "to specify the default location for Pyomo "
+                    "temporary files has been deprecated.  "
+                    "Please set TempfileManager.tempdir in "
+                    "pyomo.common.tempfiles",
+                    version='5.7.2',
+                )
+                return pyutilib_tempfiles.TempfileManager.tempdir
         return None
 
     def _remove_filesystem_object(self, name):
-        if not os.path.exists(name):
+        if not self.os.path.exists(name):
             return
-        if os.path.isfile(name) or os.path.islink(name):
+        if self.os.path.isfile(name) or self.os.path.islink(name):
             try:
-                os.remove(name)
+                self.os.remove(name)
             except WindowsError:
                 # Sometimes Windows doesn't release the
                 # file lock immediately when the process
@@ -438,7 +463,7 @@ class TempfileContext:
                 # second and try again.
                 try:
                     time.sleep(1)
-                    os.remove(name)
+                    self.os.remove(name)
                 except WindowsError:
                     if deletion_errors_are_fatal:
                         raise
@@ -446,13 +471,11 @@ class TempfileContext:
                         # Failure to delete a tempfile
                         # should NOT be fatal
                         logger = logging.getLogger(__name__)
-                        logger.warning("Unable to delete temporary "
-                                       "file %s" % (name,))
+                        logger.warning("Unable to delete temporary file %s" % (name,))
             return
-        assert os.path.isdir(name)
-        shutil.rmtree(
-            name,
-            ignore_errors=not deletion_errors_are_fatal)
+        assert self.os.path.isdir(name)
+        self.shutil.rmtree(name, ignore_errors=not deletion_errors_are_fatal)
+
 
 # The global Pyomo TempfileManager instance
-TempfileManager = TempfileManagerClass()
+TempfileManager: TempfileManagerClass = MultiThreadWrapperWithMain(TempfileManagerClass)

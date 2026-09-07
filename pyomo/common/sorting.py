@@ -1,14 +1,14 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
-class _robust_sort_keyfcn(object):
+
+class _robust_sort_keyfcn:
     """Class for robustly generating sortable keys for arbitrary data.
 
     Generates keys (for use with Python `sorted()` that are
@@ -22,6 +22,7 @@ class _robust_sort_keyfcn(object):
     user's original key function, if provided
 
     """
+
     _typemap = {
         int: (1, float.__name__),
         float: (1, float.__name__),
@@ -59,7 +60,7 @@ class _robust_sort_keyfcn(object):
             # it is, sort it as if it were a float.
             try:
                 # Extra check that the comparison returns a meaningful result
-                if bool(val < 1.) != bool(1. < val or 1. == val):
+                if bool(val < 1.0) != bool(1.0 < val or 1.0 == val):
                     _typename = float.__name__
             except:
                 pass
@@ -91,7 +92,7 @@ class _robust_sort_keyfcn(object):
             # value type is convertible to string
             return _typename, str(val)
         else:
-            # everything else (incuding i==3), fall back on id()
+            # everything else (including i==3), fall back on id()
             return _typename, id(val)
 
 
@@ -109,7 +110,7 @@ def sorted_robust(iterable, key=None, reverse=False):
         the source of items to sort
     key: function
         a function of one argument that is used to extract the
-        comparison ket from each element in `iterable`
+        comparison key from each element in `iterable`
     reverse: bool
         if True, the iterable is sorted as if each comparison was reversed.
 

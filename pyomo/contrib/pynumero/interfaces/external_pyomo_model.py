@@ -1,31 +1,23 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import itertools
-from pyomo.environ import SolverFactory
 from pyomo.core.base.var import Var
 from pyomo.core.base.constraint import Constraint
 from pyomo.core.base.objective import Objective
 from pyomo.core.expr.visitor import identify_variables
-from pyomo.common.collections import ComponentSet
-from pyomo.util.calc_var_value import calculate_variable_from_constraint
-from pyomo.util.subsystems import (
-    create_subsystem_block,
-    TemporarySubsystemManager,
-)
+from pyomo.common.timing import HierarchicalTimer
+from pyomo.util.subsystems import create_subsystem_block
 from pyomo.contrib.pynumero.interfaces.pyomo_nlp import PyomoNLP
-from pyomo.contrib.pynumero.interfaces.external_grey_box import (
-    ExternalGreyBoxModel,
-)
-from pyomo.contrib.incidence_analysis.util import (
-    generate_strongly_connected_components,
+from pyomo.contrib.pynumero.interfaces.external_grey_box import ExternalGreyBoxModel
+from pyomo.contrib.pynumero.algorithms.solvers.implicit_functions import (
+    SccImplicitFunctionSolver,
 )
 import numpy as np
 import scipy.sparse as sps
@@ -55,7 +47,7 @@ def _dense_to_full_sparse(matrix):
     for i, j in itertools.product(range(nrow), range(ncol)):
         row.append(i)
         col.append(j)
-        data.append(matrix[i,j])
+        data.append(matrix[i, j])
     row = np.array(row)
     col = np.array(col)
     data = np.array(data)
@@ -70,7 +62,7 @@ def get_hessian_of_constraint(constraint, wrt1=None, wrt2=None, nlp=None):
         wrt2 = variables
     elif wrt1 is not None and wrt2 is not None:
         variables = wrt1 + wrt2
-    elif wrt1 is not None: # but wrt2 is None
+    elif wrt1 is not None:  # but wrt2 is None
         wrt2 = wrt1
         variables = wrt1
     else:
@@ -135,29 +127,68 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
 
     """
 
-    def __init__(self,
-            input_vars,
-            external_vars,
-            residual_cons,
-            external_cons,
-            solver=None,
-            ):
-        if solver is None:
-            solver = SolverFactory("ipopt")
-        self._solver = solver
+    def __init__(
+        self,
+        input_vars,
+        external_vars,
+        residual_cons,
+        external_cons,
+        solver_class=None,
+        solver_options=None,
+        timer=None,
+    ):
+        """
+        Arguments:
+        ----------
+        input_vars: list
+            List of variables sent to this system by the outer solver
+        external_vars: list
+            List of variables that are solved for internally by this system
+        residual_cons: list
+            List of equality constraints whose residuals are exposed to
+            the outer solver
+        external_cons: list
+            List of equality constraints used to solve for the external
+            variables
+        solver_class: Subclass of ImplicitFunctionSolver
+            The solver object that is used to converge the system of
+            equations defining the implicit function.
+        solver_options: dict
+            Options dict for the ImplicitFunctionSolver
+        timer: HierarchicalTimer
+            HierarchicalTimer object to which new timing categories introduced
+            will be attached. If None, a new timer will be created.
+
+        """
+        if timer is None:
+            timer = HierarchicalTimer()
+        self._timer = timer
+        if solver_class is None:
+            solver_class = SccImplicitFunctionSolver
+        self._solver_class = solver_class
+        if solver_options is None:
+            solver_options = {}
+
+        self._timer.start("__init__")
 
         # We only need this block to construct the NLP, which wouldn't
         # be necessary if we could compute Hessians of Pyomo constraints.
         self._block = create_subsystem_block(
-                residual_cons+external_cons,
-                input_vars+external_vars,
-                )
+            residual_cons + external_cons, input_vars + external_vars
+        )
         self._block._obj = Objective(expr=0.0)
+        self._timer.start("PyomoNLP")
         self._nlp = PyomoNLP(self._block)
+        self._timer.stop("PyomoNLP")
 
-        self._scc_list = list(generate_strongly_connected_components(
-            external_cons, variables=external_vars
-        ))
+        # Instantiate a solver with the ImplicitFunctionSolver API:
+        self._solver = self._solver_class(
+            external_vars,
+            external_cons,
+            input_vars,
+            timer=self._timer,
+            **solver_options,
+        )
 
         assert len(external_vars) == len(external_cons)
 
@@ -167,6 +198,13 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         self.external_cons = external_cons
 
         self.residual_con_multipliers = [None for _ in residual_cons]
+        self.residual_scaling_factors = None
+
+        self._input_output_coords = self._nlp.get_primal_indices(
+            input_vars + external_vars
+        )
+
+        self._timer.stop("__init__")
 
     def n_inputs(self):
         return len(self.input_vars)
@@ -177,34 +215,31 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
     # I would like to try to get by without using the following "name" methods.
     def input_names(self):
         return ["input_%i" % i for i in range(self.n_inputs())]
+
     def equality_constraint_names(self):
         return ["residual_%i" % i for i in range(self.n_equality_constraints())]
 
     def set_input_values(self, input_values):
+        self._timer.start("set_inputs")
+
         solver = self._solver
         external_cons = self.external_cons
         external_vars = self.external_vars
         input_vars = self.input_vars
 
-        for var, val in zip(input_vars, input_values):
-            var.set_value(val)
+        solver.set_parameters(input_values)
+        outputs = solver.evaluate_outputs()
+        solver.update_pyomo_model()
 
-        for block, inputs in self._scc_list:
-            if len(block.vars) == 1:
-                calculate_variable_from_constraint(
-                    block.vars[0], block.cons[0]
-                )
-            else:
-                with TemporarySubsystemManager(to_fix=inputs):
-                    solver.solve(block)
-
+        #
         # Send updated variable values to NLP for dervative evaluation
+        #
         primals = self._nlp.get_primals()
-        to_update = input_vars + external_vars
-        indices = self._nlp.get_primal_indices(to_update)
-        values = np.fromiter((var.value for var in to_update), float)
-        primals[indices] = values
+        values = np.concatenate((input_values, outputs))
+        primals[self._input_output_coords] = values
         self._nlp.set_primals(primals)
+
+        self._timer.stop("set_inputs")
 
     def set_equality_constraint_multipliers(self, eq_con_multipliers):
         """
@@ -218,7 +253,7 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
     def set_external_constraint_multipliers(self, eq_con_multipliers):
         eq_con_multipliers = np.array(eq_con_multipliers)
         external_multipliers = self.calculate_external_constraint_multipliers(
-            eq_con_multipliers,
+            eq_con_multipliers
         )
         multipliers = np.concatenate((eq_con_multipliers, external_multipliers))
         cons = self.residual_cons + self.external_cons
@@ -251,7 +286,7 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
 
         jgy_t = jgy.transpose()
         jfy_t = jfy.transpose()
-        dfdg = - sps.linalg.splu(jgy_t.tocsc()).solve(jfy_t.toarray())
+        dfdg = -sps.linalg.splu(jgy_t.tocsc()).solve(jfy_t.toarray())
         resid_multipliers = np.array(resid_multipliers)
         external_multipliers = dfdg.dot(resid_multipliers)
         return external_multipliers
@@ -297,6 +332,8 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         return self._nlp.extract_subvector_constraints(self.residual_cons)
 
     def evaluate_jacobian_equality_constraints(self):
+        self._timer.start("jacobian")
+
         nlp = self._nlp
         x = self.input_vars
         y = self.external_vars
@@ -309,7 +346,7 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
 
         nf = len(f)
         nx = len(x)
-        n_entries = nf*nx
+        n_entries = nf * nx
 
         # TODO: Does it make sense to cast dydx to a sparse matrix?
         # My intuition is that it does only if jgy is "decomposable"
@@ -321,7 +358,10 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         # be nonzero. Here, this is all of the entries.
         dfdx = jfx + jfy.dot(dydx)
 
-        return _dense_to_full_sparse(dfdx)
+        full_sparse = _dense_to_full_sparse(dfdx)
+
+        self._timer.stop("jacobian")
+        return full_sparse
 
     def evaluate_jacobian_external_variables(self):
         nlp = self._nlp
@@ -348,15 +388,15 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         ny = len(y)
         nx = len(x)
 
-        hgxx = np.array([
-            get_hessian_of_constraint(con, x, nlp=nlp).toarray() for con in g
-            ])
-        hgxy = np.array([
-            get_hessian_of_constraint(con, x, y, nlp=nlp).toarray() for con in g
-            ])
-        hgyy = np.array([
-            get_hessian_of_constraint(con, y, nlp=nlp).toarray() for con in g
-            ])
+        hgxx = np.array(
+            [get_hessian_of_constraint(con, x, nlp=nlp).toarray() for con in g]
+        )
+        hgxy = np.array(
+            [get_hessian_of_constraint(con, x, y, nlp=nlp).toarray() for con in g]
+        )
+        hgyy = np.array(
+            [get_hessian_of_constraint(con, y, nlp=nlp).toarray() for con in g]
+        )
 
         # This term is sparse, but we do not exploit it.
         term1 = hgxx
@@ -374,7 +414,7 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
 
         rhs = term1 + term2 + term3
 
-        rhs.shape = (ny, nx*nx)
+        rhs.shape = (ny, nx * nx)
         sol = jgy_fact.solve(rhs)
         sol.shape = (ny, nx, nx)
         d2ydx2 = -sol
@@ -401,15 +441,15 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         nf = len(f)
         nx = len(x)
 
-        hfxx = np.array([
-            get_hessian_of_constraint(con, x, nlp=nlp).toarray() for con in f
-            ])
-        hfxy = np.array([
-            get_hessian_of_constraint(con, x, y, nlp=nlp).toarray() for con in f
-            ])
-        hfyy = np.array([
-            get_hessian_of_constraint(con, y, nlp=nlp).toarray() for con in f
-            ])
+        hfxx = np.array(
+            [get_hessian_of_constraint(con, x, nlp=nlp).toarray() for con in f]
+        )
+        hfxy = np.array(
+            [get_hessian_of_constraint(con, x, y, nlp=nlp).toarray() for con in f]
+        )
+        hfyy = np.array(
+            [get_hessian_of_constraint(con, y, nlp=nlp).toarray() for con in f]
+        )
 
         d2ydx2 = self.evaluate_hessian_external_variables()
 
@@ -418,7 +458,7 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         term2 = prod + prod.transpose((0, 2, 1))
         term3 = hfyy.dot(dydx).transpose((0, 2, 1)).dot(dydx)
 
-        d2ydx2.shape = (ny, nx*nx)
+        d2ydx2.shape = (ny, nx * nx)
         term4 = jfy.dot(d2ydx2)
         term4.shape = (nf, nx, nx)
 
@@ -432,6 +472,8 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         due to these equality constraints.
 
         """
+        self._timer.start("hessian")
+
         # External multipliers must be calculated after both primals and duals
         # are set, and are only necessary for this Hessian calculation.
         # We know this Hessian calculation wants to use the most recently
@@ -447,4 +489,20 @@ class ExternalPyomoModel(ExternalGreyBoxModel):
         # Hessian-of-Lagrangian term in the full space.
         hess_lag = self.calculate_reduced_hessian_lagrangian(hlxx, hlxy, hlyy)
         sparse = _dense_to_full_sparse(hess_lag)
-        return sps.tril(sparse)
+        lower_triangle = sps.tril(sparse)
+        self._timer.stop("hessian")
+        return lower_triangle
+
+    def set_equality_constraint_scaling_factors(self, scaling_factors):
+        """
+        Set scaling factors for the equality constraints that are exposed
+        to a solver. These are the "residual equations" in this class.
+        """
+        self.residual_scaling_factors = np.array(scaling_factors)
+
+    def get_equality_constraint_scaling_factors(self):
+        """
+        Get scaling factors for the equality constraints that are exposed
+        to a solver. These are the "residual equations" in this class.
+        """
+        return self.residual_scaling_factors

@@ -1,156 +1,193 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import inspect
+import sys
+from importlib.machinery import PathFinder
 from io import StringIO
 
 import pyomo.common.unittest as unittest
 
 from pyomo.common.log import LoggingIntercept
 from pyomo.common.dependencies import (
-    attempt_import, ModuleUnavailable, DeferredImportModule,
-    DeferredImportIndicator, DeferredImportError,
-    _DeferredAnd, _DeferredOr, check_min_version
+    attempt_import,
+    ModuleUnavailable,
+    DeferredImportModule,
+    DeferredImportIndicator,
+    DeferredImportError,
+    UnavailableClass,
+    _DeferredAnd,
+    _DeferredOr,
+    _DeferredImportCallbackFinder,
+    check_min_version,
+    dill,
+    dill_available,
+    mpi4py_available,
+    packaging_available,
 )
 
 import pyomo.common.tests.dep_mod as dep_mod
-from pyomo.common.tests.dep_mod import (
-    bogus_nonexisting_module as bogus_nem,
-    bogus_nonexisting_module_available as has_bogus_nem,
-)
 
-bogus, bogus_available \
-    = attempt_import('nonexisting.module.bogus', defer_check=True)
+from . import deps
+
 
 # global objects for the submodule tests
 def _finalize_pyo(module, available):
     if available:
         import pyomo.core
 
-pyo, pyo_available = attempt_import(
-    'pyomo', alt_names=['pyo'],
-    deferred_submodules={'version': None,
-                         'common.tests.dep_mod': ['dm']})
-dm = pyo.common.tests.dep_mod
 
 class TestDependencies(unittest.TestCase):
     def test_import_error(self):
         module_obj, module_available = attempt_import(
             '__there_is_no_module_named_this__',
-            'Testing import of a non-existant module',
-            defer_check=False)
+            'Testing import of a non-existent module',
+            defer_import=False,
+        )
         self.assertFalse(module_available)
         with self.assertRaisesRegex(
-                DeferredImportError, 'Testing import of a non-existant module'):
+            DeferredImportError, 'Testing import of a non-existent module'
+        ):
             module_obj.try_to_call_a_method()
 
         # Note that some attribute will intentionally raise
         # AttributeErrors and NOT DeferredImportError:
         with self.assertRaisesRegex(
-                AttributeError, "'ModuleUnavailable' object has no "
-                "attribute '__sphinx_mock__'"):
+            AttributeError,
+            "'ModuleUnavailable' object has no attribute '__sphinx_mock__'",
+        ):
             module_obj.__sphinx_mock__
 
+    @unittest.skipUnless(dill_available, "Test requires dill module")
+    def test_pickle(self):
+        self.assertIs(deps.pkl_test.__class__, DeferredImportModule)
+        # Pickle the DeferredImportModule class
+        pkl = dill.dumps(deps.pkl_test)
+        deps.new_pkl_test = dill.loads(pkl)
+        self.assertIs(deps.pkl_test.__class__, deps.new_pkl_test.__class__)
+        self.assertIs(deps.new_pkl_test.__class__, DeferredImportModule)
+        self.assertIsNot(deps.pkl_test, deps.new_pkl_test)
+        self.assertIn('submod', deps.new_pkl_test.__dict__)
+        with self.assertRaisesRegex(
+            DeferredImportError, 'nonexisting.module.pickle_test module'
+        ):
+            deps.new_pkl_test.try_to_call_a_method()
+        # Pickle the ModuleUnavailable class
+        self.assertIs(deps.new_pkl_test.__class__, ModuleUnavailable)
+        pkl = dill.dumps(deps.new_pkl_test)
+        new_pkl_test_2 = dill.loads(pkl)
+        self.assertIs(deps.new_pkl_test.__class__, new_pkl_test_2.__class__)
+        self.assertIsNot(deps.new_pkl_test, new_pkl_test_2)
+        self.assertIs(new_pkl_test_2.__class__, ModuleUnavailable)
 
     def test_import_success(self):
         module_obj, module_available = attempt_import(
-            'ply', 'Testing import of ply', defer_check=False)
+            'pyomo.tpl.ply', 'Testing import of ply', defer_import=False
+        )
         self.assertTrue(module_available)
-        import ply
-        self.assertTrue(module_obj is ply)
+        import pyomo.tpl.ply
+
+        self.assertTrue(module_obj is pyomo.tpl.ply)
 
     def test_local_deferred_import(self):
-        self.assertIs(type(bogus_available), DeferredImportIndicator)
-        self.assertIs(type(bogus), DeferredImportModule)
-        if bogus_available:
+        self.assertIs(type(deps.bogus_available), DeferredImportIndicator)
+        self.assertIs(type(deps.bogus), DeferredImportModule)
+        if deps.bogus_available:
             self.fail("Casting bogus_available to bool returned True")
-        self.assertIs(bogus_available, False)
+        self.assertIs(deps.bogus_available, False)
         # Note: this also tests the implicit alt_names for dotted imports
-        self.assertIs(type(bogus), ModuleUnavailable)
+        self.assertIs(type(deps.bogus), ModuleUnavailable)
         with self.assertRaisesRegex(
-                DeferredImportError, "The nonexisting.module.bogus module "
-                r"\(an optional Pyomo dependency\) failed to import"):
-            bogus.hello
+            DeferredImportError,
+            "The nonexisting.module.bogus module "
+            r"\(an optional Pyomo dependency\) failed to import",
+        ):
+            deps.bogus.hello
 
     def test_imported_deferred_import(self):
-        self.assertIs(type(has_bogus_nem), DeferredImportIndicator)
-        self.assertIs(type(bogus_nem), DeferredImportModule)
+        self.assertIs(type(deps.has_bogus_nem), DeferredImportIndicator)
+        self.assertIs(type(deps.bogus_nem), DeferredImportModule)
         with self.assertRaisesRegex(
-                DeferredImportError, "The bogus_nonexisting_module module "
-                r"\(an optional Pyomo dependency\) failed to import"):
-            bogus_nem.hello
-        self.assertIs(has_bogus_nem, False)
-        self.assertIs(type(bogus_nem), ModuleUnavailable)
+            DeferredImportError,
+            "The bogus_nonexisting_module module "
+            r"\(an optional Pyomo dependency\) failed to import",
+        ):
+            deps.test_access_bogus_hello()
+        self.assertIs(deps.has_bogus_nem, False)
+        self.assertIs(type(deps.bogus_nem), ModuleUnavailable)
         self.assertIs(dep_mod.bogus_nonexisting_module_available, False)
         self.assertIs(type(dep_mod.bogus_nonexisting_module), ModuleUnavailable)
 
+    @unittest.skipUnless(
+        packaging_available, "min_version tests require packaging module"
+    )
     def test_min_version(self):
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod',
-                                    minimum_version='1.0',
-                                    defer_check=False)
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod', minimum_version='1.0', defer_import=False
+        )
         self.assertTrue(avail)
         self.assertTrue(inspect.ismodule(mod))
         self.assertTrue(check_min_version(mod, '1.0'))
         self.assertFalse(check_min_version(mod, '2.0'))
 
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod',
-                                    minimum_version='2.0',
-                                    defer_check=False)
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod', minimum_version='2.0', defer_import=False
+        )
         self.assertFalse(avail)
         self.assertIs(type(mod), ModuleUnavailable)
         with self.assertRaisesRegex(
-                DeferredImportError, "The pyomo.common.tests.dep_mod module "
-                "version 1.5 does not satisfy the minimum version 2.0"):
+            DeferredImportError,
+            "The pyomo.common.tests.dep_mod module "
+            "version 1.5 does not satisfy the minimum version 2.0",
+        ):
             mod.hello
 
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod',
-                                    error_message="Failed import",
-                                    minimum_version='2.0',
-                                    defer_check=False)
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod',
+            error_message="Failed import",
+            minimum_version='2.0',
+            defer_import=False,
+        )
         self.assertFalse(avail)
         self.assertIs(type(mod), ModuleUnavailable)
         with self.assertRaisesRegex(
-                DeferredImportError, "Failed import "
-                r"\(version 1.5 does not satisfy the minimum version 2.0\)"):
+            DeferredImportError,
+            "Failed import "
+            r"\(version 1.5 does not satisfy the minimum version 2.0\)",
+        ):
             mod.hello
 
         # Verify check_min_version works with deferred imports
 
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod',
-                                    defer_check=True)
+        mod, avail = attempt_import('pyomo.common.tests.dep_mod', defer_import=True)
         self.assertTrue(check_min_version(mod, '1.0'))
 
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod',
-                                    defer_check=True)
+        mod, avail = attempt_import('pyomo.common.tests.dep_mod', defer_import=True)
         self.assertFalse(check_min_version(mod, '2.0'))
 
         # Verify check_min_version works when called directly
 
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod',
-                                    minimum_version='1.0')
+        mod, avail = attempt_import('pyomo.common.tests.dep_mod', minimum_version='1.0')
         self.assertTrue(check_min_version(mod, '1.0'))
 
-        mod, avail = attempt_import('pyomo.common.tests.bogus',
-                                    minimum_version='1.0')
+        mod, avail = attempt_import('pyomo.common.tests.bogus', minimum_version='1.0')
         self.assertFalse(check_min_version(mod, '1.0'))
 
-
-
+    @unittest.skipUnless(
+        packaging_available, "min_version tests require packaging module"
+    )
     def test_and_or(self):
-        mod0, avail0 = attempt_import('ply',
-                                      defer_check=True)
-        mod1, avail1 = attempt_import('pyomo.common.tests.dep_mod',
-                                      defer_check=True)
-        mod2, avail2 = attempt_import('pyomo.common.tests.dep_mod',
-                                      minimum_version='2.0',
-                                      defer_check=True)
+        mod0, avail0 = attempt_import('pyomo.tpl.ply', defer_import=True)
+        mod1, avail1 = attempt_import('pyomo.common.tests.dep_mod', defer_import=True)
+        mod2, avail2 = attempt_import(
+            'pyomo.common.tests.dep_mod', minimum_version='2.0', defer_import=True
+        )
 
         _and = avail0 & avail1
         self.assertIsInstance(_and, _DeferredAnd)
@@ -181,7 +218,7 @@ class TestDependencies(unittest.TestCase):
         _and_or = avail0 & avail1 | avail2
         self.assertTrue(_and_or)
 
-        # Verify operator prescedence
+        # Verify operator precedence
         _or_and = avail0 | avail2 & avail2
         self.assertTrue(_or_and)
         _or_and = (avail0 | avail2) & avail2
@@ -199,44 +236,139 @@ class TestDependencies(unittest.TestCase):
         self.assertIsInstance(_ror, _DeferredOr)
         self.assertTrue(_ror)
 
-
+    @unittest.skipUnless(
+        packaging_available, "min_version tests require packaging module"
+    )
     def test_callbacks(self):
         ans = []
+
         def _record_avail(module, avail):
             ans.append(avail)
 
-        mod0, avail0 = attempt_import('ply',
-                                      defer_check=True,
-                                      callback=_record_avail)
-        mod1, avail1 = attempt_import('pyomo.common.tests.dep_mod',
-                                      minimum_version='2.0',
-                                      defer_check=True,
-                                      callback=_record_avail)
+        mod0, avail0 = attempt_import(
+            'pyomo.tpl.ply', defer_import=True, callback=_record_avail
+        )
+        mod1, avail1 = attempt_import(
+            'pyomo.common.tests.dep_mod',
+            minimum_version='2.0',
+            defer_import=True,
+            callback=_record_avail,
+        )
 
         self.assertEqual(ans, [])
         self.assertTrue(avail0)
         self.assertEqual(ans, [True])
         self.assertFalse(avail1)
-        self.assertEqual(ans, [True,False])
+        self.assertEqual(ans, [True, False])
+
+    def test_callback_on_import(self):
+        sys.modules.pop('pyomo.common.tests.mod', None)
+        ans = []
+
+        class ImpFinder:
+            # This is an "imp" module-style finder (deprecated in Python
+            # 3.4 and removed in Python 3.12, but Google Collab still
+            # defines finders like this)
+            match = ''
+
+            def find_module(self, fullname, path=None):
+                if fullname != self.match:
+                    ans.append('pass')
+                    return None
+                ans.append('load')
+                spec = PathFinder().find_spec(fullname, path)
+                return spec.loader
+
+            def load_module(self, name):
+                pass
+
+        def _callback(module, avail):
+            ans.append(len(ans))
+
+        attempt_import('pyomo.common.tests.mod', defer_import=True, callback=_callback)
+        self.assertEqual(ans, [])
+        import pyomo.common.tests.mod as m
+
+        self.assertEqual(ans, [0])
+        self.assertEqual(m.Foo.data, 42)
+
+        sys.modules.pop('pyomo.common.tests.mod', None)
+        del m
+        attempt_import('pyomo.common.tests.mod', defer_import=True, callback=_callback)
+
+        try:
+            # Test deferring to an imp-style finder that does not match
+            # the target module name
+            _finder = ImpFinder()
+            sys.meta_path.insert(
+                sys.meta_path.index(_DeferredImportCallbackFinder) + 1, _finder
+            )
+            import pyomo.common.tests.mod as m
+
+            self.assertEqual(ans, [0, 'pass', 2])
+            self.assertEqual(m.Foo.data, 42)
+
+            sys.modules.pop('pyomo.common.tests.mod', None)
+            del m
+            attempt_import(
+                'pyomo.common.tests.mod', defer_import=True, callback=_callback
+            )
+
+            # Test deferring to an imp-style finder that DOES match the
+            # target module name
+            _finder.match = 'pyomo.common.tests.mod'
+
+            import pyomo.common.tests.mod as m
+
+            self.assertEqual(ans, [0, 'pass', 2, 'load', 4])
+            self.assertEqual(m.Foo.data, 42)
+        finally:
+            sys.meta_path.remove(_finder)
 
     def test_import_exceptions(self):
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod_except',
-                                    defer_check=True)
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod_except',
+            defer_import=True,
+            only_catch_importerror=True,
+        )
         with self.assertRaisesRegex(ValueError, "cannot import module"):
             bool(avail)
         # second test will not re-trigger the exception
         self.assertFalse(avail)
 
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod_except',
-                                    defer_check=True,
-                                    only_catch_importerror=False)
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod_except',
+            defer_import=True,
+            only_catch_importerror=False,
+        )
         self.assertFalse(avail)
         self.assertFalse(avail)
 
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod_except',
+            defer_import=True,
+            catch_exceptions=(ImportError, ValueError),
+        )
+        self.assertFalse(avail)
+        self.assertFalse(avail)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            'Cannot specify both only_catch_importerror and catch_exceptions',
+        ):
+            mod, avail = attempt_import(
+                'pyomo.common.tests.dep_mod_except',
+                defer_import=True,
+                only_catch_importerror=True,
+                catch_exceptions=(ImportError,),
+            )
+
     def test_generate_warning(self):
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod_except',
-                                    defer_check=True,
-                                    only_catch_importerror=False)
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod_except',
+            defer_import=True,
+            only_catch_importerror=False,
+        )
 
         # Test generate warning
         log = StringIO()
@@ -247,10 +379,11 @@ class TestDependencies(unittest.TestCase):
         self.assertIn(
             "The pyomo.common.tests.dep_mod_except module "
             "(an optional Pyomo dependency) failed to import",
-            log.getvalue())
+            log.getvalue(),
+        )
         self.assertIn(
-            "DEPRECATED: use :py:class:`log_import_warning()`",
-            dep.getvalue())
+            "DEPRECATED: use :py:class:`log_import_warning()`", dep.getvalue()
+        )
 
         log = StringIO()
         dep = StringIO()
@@ -260,15 +393,18 @@ class TestDependencies(unittest.TestCase):
         self.assertIn(
             "The pyomo.common.tests.dep_mod_except module "
             "(an optional Pyomo dependency) failed to import",
-            log.getvalue())
+            log.getvalue(),
+        )
         self.assertIn(
-            "DEPRECATED: use :py:class:`log_import_warning()`",
-            dep.getvalue())
+            "DEPRECATED: use :py:class:`log_import_warning()`", dep.getvalue()
+        )
 
     def test_log_warning(self):
-        mod, avail = attempt_import('pyomo.common.tests.dep_mod_except',
-                                    defer_check=True,
-                                    only_catch_importerror=False)
+        mod, avail = attempt_import(
+            'pyomo.common.tests.dep_mod_except',
+            defer_import=True,
+            only_catch_importerror=False,
+        )
         log = StringIO()
         dep = StringIO()
         with LoggingIntercept(dep, 'pyomo'):
@@ -277,7 +413,8 @@ class TestDependencies(unittest.TestCase):
         self.assertIn(
             "The pyomo.common.tests.dep_mod_except module "
             "(an optional Pyomo dependency) failed to import",
-            dep.getvalue())
+            dep.getvalue(),
+        )
         self.assertNotIn("DEPRECATED:", dep.getvalue())
         self.assertEqual("", log.getvalue())
 
@@ -289,7 +426,8 @@ class TestDependencies(unittest.TestCase):
         self.assertIn(
             "The pyomo.common.tests.dep_mod_except module "
             "(an optional Pyomo dependency) failed to import",
-            log.getvalue())
+            log.getvalue(),
+        )
         self.assertEqual("", dep.getvalue())
 
         log = StringIO()
@@ -297,20 +435,18 @@ class TestDependencies(unittest.TestCase):
             with LoggingIntercept(log, 'pyomo.core.base'):
                 mod.log_import_warning('pyomo.core.base', "Custom")
         self.assertIn(
-            "Custom (import raised ValueError: cannot import module)",
-            log.getvalue())
+            "Custom (import raised ValueError: cannot import module)", log.getvalue()
+        )
         self.assertEqual("", dep.getvalue())
 
     def test_importer(self):
         attempted_import = []
+
         def _importer():
             attempted_import.append(True)
-            return attempt_import('pyomo.common.tests.dep_mod',
-                                  defer_check=False)[0]
+            return attempt_import('pyomo.common.tests.dep_mod', defer_import=False)[0]
 
-        mod, avail = attempt_import('foo',
-                                    importer=_importer,
-                                    defer_check=True)
+        mod, avail = attempt_import('foo', importer=_importer, defer_import=True)
 
         self.assertEqual(attempted_import, [])
         self.assertIsInstance(mod, DeferredImportModule)
@@ -320,38 +456,42 @@ class TestDependencies(unittest.TestCase):
 
     def test_deferred_submodules(self):
         import pyomo
+
         pyo_ver = pyomo.version.version
 
-        self.assertIsInstance(pyo, DeferredImportModule)
-        self.assertIsNone(pyo._submodule_name)
-        self.assertEqual(pyo_available._deferred_submodules,
-                         ['.version',
-                          '.common',
-                          '.common.tests',
-                          '.common.tests.dep_mod',])
+        self.assertIsInstance(deps.pyo, DeferredImportModule)
+        self.assertIsNone(deps.pyo._submodule_name)
+        self.assertEqual(
+            deps.pyo_available._deferred_submodules,
+            ['.version', '.common', '.common.tests', '.common.tests.dep_mod'],
+        )
         # This doesn't cause test_mod to be resolved
-        version = pyo.version
-        self.assertIsInstance(pyo, DeferredImportModule)
-        self.assertIsNone(pyo._submodule_name)
-        self.assertIsInstance(dm, DeferredImportModule)
-        self.assertEqual(dm._submodule_name, '.common.tests.dep_mod')
+        version = deps.pyo.version
+        self.assertIsInstance(deps.pyo, DeferredImportModule)
+        self.assertIsNone(deps.pyo._submodule_name)
+        self.assertIsInstance(deps.dm, DeferredImportModule)
+        self.assertEqual(deps.dm._submodule_name, '.common.tests.dep_mod')
         self.assertIsInstance(version, DeferredImportModule)
         self.assertEqual(version._submodule_name, '.version')
         # This causes the global objects to be resolved
         self.assertEqual(version.version, pyo_ver)
-        self.assertTrue(inspect.ismodule(pyo))
-        self.assertTrue(inspect.ismodule(dm))
+        self.assertTrue(inspect.ismodule(deps.pyo))
+        self.assertTrue(inspect.ismodule(deps.dm))
 
         with self.assertRaisesRegex(
-                ValueError,
-                "deferred_submodules is only valid if defer_check==True"):
+            ValueError, "deferred_submodules is only valid if defer_import==True"
+        ):
             mod, mod_available = attempt_import(
-                'nonexisting.module', defer_check=False,
-                deferred_submodules={'submod': None})
+                'nonexisting.module',
+                defer_import=False,
+                deferred_submodules={'submod': None},
+            )
 
         mod, mod_available = attempt_import(
-            'nonexisting.module', defer_check=True,
-            deferred_submodules={'submod.subsubmod': None})
+            'nonexisting.module',
+            defer_import=True,
+            deferred_submodules={'submod.subsubmod': None},
+        )
         self.assertIs(type(mod), DeferredImportModule)
         self.assertFalse(mod_available)
         _mod = mod_available._module
@@ -360,6 +500,40 @@ class TestDependencies(unittest.TestCase):
         self.assertIs(type(_mod.submod), ModuleUnavailable)
         self.assertTrue(hasattr(_mod.submod, 'subsubmod'))
         self.assertIs(type(_mod.submod.subsubmod), ModuleUnavailable)
+
+    def test_UnavailableClass(self):
+        module_obj, module_available = attempt_import(
+            '__there_is_no_module_named_this__',
+            'Testing import of a non-existent module',
+            defer_import=False,
+        )
+
+        class A_Class(UnavailableClass(module_obj)):
+            pass
+
+        with self.assertRaisesRegex(
+            DeferredImportError,
+            "The class 'A_Class' cannot be created because a needed optional "
+            r"dependency was not found \(import raised ModuleNotFoundError: No "
+            r"module named '__there_is_no_module_named_this__'\)",
+        ):
+            A_Class()
+
+        with self.assertRaisesRegex(
+            DeferredImportError,
+            "The class attribute 'A_Class.method' is not available because a "
+            r"needed optional dependency was not found \(import raised "
+            "ModuleNotFoundError: No module named "
+            r"'__there_is_no_module_named_this__'\)",
+        ):
+            A_Class.method()
+
+    @unittest.pytest.mark.mpi
+    def test_mpi4py_available(self):
+        from mpi4py import MPI
+
+        self.assertTrue(bool(mpi4py_available))
+
 
 if __name__ == '__main__':
     unittest.main()

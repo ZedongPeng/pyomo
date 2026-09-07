@@ -1,15 +1,36 @@
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
 """Tests the variable aggregation module."""
+
 import pyomo.common.unittest as unittest
 from pyomo.common.collections import ComponentSet
 from pyomo.contrib.preprocessing.plugins.var_aggregator import (
     _build_equality_set,
     _get_equality_linked_variables,
     max_if_not_None,
-    min_if_not_None
+    min_if_not_None,
 )
-from pyomo.environ import (ConcreteModel, Constraint, ConstraintList,
-                           Objective, RangeSet, SolverFactory,
-                           TransformationFactory, Var)
+from pyomo.core.expr.compare import assertExpressionsEqual
+from pyomo.environ import (
+    Binary,
+    ConcreteModel,
+    Constraint,
+    ConstraintList,
+    maximize,
+    Objective,
+    RangeSet,
+    Reals,
+    SolverFactory,
+    TransformationFactory,
+    Var,
+)
 
 
 class TestVarAggregate(unittest.TestCase):
@@ -78,7 +99,7 @@ class TestVarAggregate(unittest.TestCase):
         with self.assertRaises(ValueError):
             TransformationFactory('contrib.aggregate_vars').apply_to(m)
 
-    def test_do_not_tranform_deactivated_constraints(self):
+    def test_do_not_transform_deactivated_constraints(self):
         m = ConcreteModel()
         m.x = Var()
         m.y = Var()
@@ -113,17 +134,17 @@ class TestVarAggregate(unittest.TestCase):
         self.assertEqual(eq_var_map[m.v3], ComponentSet([m.v3, m.v4]))
         self.assertEqual(eq_var_map[m.v4], ComponentSet([m.v3, m.v4]))
         self.assertEqual(
-            eq_var_map[m.x[1]],
-            ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]]))
+            eq_var_map[m.x[1]], ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]])
+        )
         self.assertEqual(
-            eq_var_map[m.x[2]],
-            ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]]))
+            eq_var_map[m.x[2]], ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]])
+        )
         self.assertEqual(
-            eq_var_map[m.x[3]],
-            ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]]))
+            eq_var_map[m.x[3]], ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]])
+        )
         self.assertEqual(
-            eq_var_map[m.x[4]],
-            ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]]))
+            eq_var_map[m.x[4]], ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]])
+        )
         self.assertEqual(eq_var_map[m.y[1]], ComponentSet([m.y[1], m.y[2]]))
         self.assertEqual(eq_var_map[m.y[2]], ComponentSet([m.y[1], m.y[2]]))
 
@@ -135,14 +156,11 @@ class TestVarAggregate(unittest.TestCase):
         z_to_vars = m._var_aggregator_info.z_to_vars
         var_to_z = m._var_aggregator_info.var_to_z
         z = m._var_aggregator_info.z
+        self.assertEqual(z_to_vars[z[1]], ComponentSet([m.v3, m.v4]))
         self.assertEqual(
-            z_to_vars[z[1]], ComponentSet([m.v3, m.v4]))
-        self.assertEqual(
-            z_to_vars[z[2]],
-            ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]]))
-        self.assertEqual(
-            z_to_vars[z[3]],
-            ComponentSet([m.y[1], m.y[2]]))
+            z_to_vars[z[2]], ComponentSet([m.x[1], m.x[2], m.x[3], m.x[4]])
+        )
+        self.assertEqual(z_to_vars[z[3]], ComponentSet([m.y[1], m.y[2]]))
         self.assertIs(var_to_z[m.v3], z[1])
         self.assertIs(var_to_z[m.v4], z[1])
         self.assertIs(var_to_z[m.x[1]], z[2])
@@ -174,8 +192,9 @@ class TestVarAggregate(unittest.TestCase):
         self.assertEqual(max_if_not_None([0]), 0)
         self.assertEqual(max_if_not_None([0, None]), 0)
 
-    @unittest.skipIf(not SolverFactory('glpk').available(),
-                     "GLPK solver is not available.")
+    @unittest.skipIf(
+        not SolverFactory('glpk').available(), "GLPK solver is not available."
+    )
     def test_var_update(self):
         m = ConcreteModel()
         m.x = Var()
@@ -192,6 +211,36 @@ class TestVarAggregate(unittest.TestCase):
         self.assertEqual(z[1].value, 0)
         self.assertEqual(m.x.value, 0)
         self.assertEqual(m.y.value, 0)
+
+    def test_binary_inequality(self):
+        m = ConcreteModel()
+        m.x = Var(domain=Binary)
+        m.y = Var(domain=Binary)
+        m.c = Constraint(expr=m.x == m.y)
+        m.o = Objective(expr=0.5 * m.x + m.y, sense=maximize)
+        TransformationFactory('contrib.aggregate_vars').apply_to(m)
+        var_to_z = m._var_aggregator_info.var_to_z
+        z = var_to_z[m.x]
+        self.assertIs(var_to_z[m.y], z)
+        self.assertEqual(z.domain, Binary)
+        self.assertEqual(z.lb, 0)
+        self.assertEqual(z.ub, 1)
+        assertExpressionsEqual(self, m.o.expr, 0.5 * z + z)
+
+    def test_equality_different_domains(self):
+        m = ConcreteModel()
+        m.x = Var(domain=Reals, bounds=(1, 2))
+        m.y = Var(domain=Binary)
+        m.c = Constraint(expr=m.x == m.y)
+        m.o = Objective(expr=0.5 * m.x + m.y, sense=maximize)
+        TransformationFactory('contrib.aggregate_vars').apply_to(m)
+        var_to_z = m._var_aggregator_info.var_to_z
+        z = var_to_z[m.x]
+        self.assertIs(var_to_z[m.y], z)
+        self.assertEqual(z.lb, 1)
+        self.assertEqual(z.ub, 1)
+        self.assertEqual(z.domain, Binary)
+        assertExpressionsEqual(self, m.o.expr, 0.5 * z + z)
 
 
 if __name__ == '__main__':

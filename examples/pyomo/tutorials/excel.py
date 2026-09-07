@@ -1,28 +1,27 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 #
 # Imports
 #
-from pyomo.environ import *
+import pyomo.environ as pyo
 
 ##
 ## Using a Model
 ##
 #
 # Pyomo makes a fundamental distinction between an abstract model and a
-# problem instance.  The Pyomo AbstractModel() class is used to manage the 
-# declaration of model components (e.g. sets and variables), and to 
+# problem instance.  The Pyomo AbstractModel() class is used to manage the
+# declaration of model components (e.g. sets and variables), and to
 # generate a problem instance.
 #
-model = AbstractModel()
+model = pyo.AbstractModel()
 
 ##
 ## Declaring Sets
@@ -30,11 +29,11 @@ model = AbstractModel()
 #
 # An unordered set of arbitrary objects
 #
-model.A = Set()
+model.A = pyo.Set()
 #
 # An unordered set of numeric values
 #
-model.B = Set()
+model.B = pyo.Set()
 #
 # A simple cross-product
 #
@@ -42,32 +41,32 @@ model.C = model.A * model.B
 #
 # A simple cross-product loaded with a tabular data format
 #
-model.D = Set(within=model.A * model.B)
+model.D = pyo.Set(within=model.A * model.B)
 #
 # A multiple cross-product
 #
-model.E = Set(within=model.A * model.B * model.A)
+model.E = pyo.Set(within=model.A * model.B * model.A)
 
 #
 # An indexed set
-# 
-model.F = Set(model.A)
+#
+model.F = pyo.Set(model.A)
 #
 # An indexed set
-# 
-model.G = Set(model.A,model.B)
+#
+model.G = pyo.Set(model.A, model.B)
 #
 # A simple set
 #
-model.H = Set()
+model.H = pyo.Set()
 #
 # A simple set
 #
-model.I = Set()
+model.I = pyo.Set()
 #
 # A two-dimensional set
 #
-model.J = Set(dimen=2)
+model.J = pyo.Set(dimen=2)
 
 ##
 ## Declaring Params
@@ -76,45 +75,45 @@ model.J = Set(dimen=2)
 #
 # A simple parameter
 #
-model.Z = Param()
+model.Z = pyo.Param()
 #
 # A single-dimension parameter
 #
-model.Y = Param(model.A)
+model.Y = pyo.Param(model.A)
 #
 # An example of initializing two single-dimension parameters together
 #
-model.X = Param(model.A)
-model.W = Param(model.A)
+model.X = pyo.Param(model.A)
+model.W = pyo.Param(model.A)
 #
 # Initializing a parameter with two indices
 #
-model.U = Param(model.I,model.A)
-model.T = Param(model.A,model.I)
+model.U = pyo.Param(model.I, model.A)
+model.T = pyo.Param(model.A, model.I)
 #
 # Initializing a parameter with missing data
 #
-model.S = Param(model.A)
+model.S = pyo.Param(model.A)
 #
 # An example of initializing two single-dimension parameters together with
 # an index set
 #
-model.R = Param(model.H, within=Reals)
-model.Q = Param(model.H, within=Reals)
+model.R = pyo.Param(model.H, within=pyo.Reals)
+model.Q = pyo.Param(model.H, within=pyo.Reals)
 #
 # An example of initializing parameters with a two-dimensional index set
 #
-model.P = Param(model.J, within=Reals)
-model.PP = Param(model.J, within=Reals)
-model.O = Param(model.J, within=Reals)
-   
+model.P = pyo.Param(model.J, within=pyo.Reals)
+model.PP = pyo.Param(model.J, within=pyo.Reals)
+model.O = pyo.Param(model.J, within=pyo.Reals)
+
 ##
-## Process an input file and confirm that we get appropriate 
+## Process an input file and confirm that we get appropriate
 ## set instances.
 ##
-#model.pprint()
+# model.pprint()
 
-data = DataPortal(model=model)
+data = pyo.DataPortal(model=model)
 data.load(filename="excel.xls", range="Atable", format='set', set='A')
 data.load(filename="excel.xls", range="Btable", format='set', set='B')
 data.load(filename="excel.xls", range="Ctable", format='set', set='C')
@@ -123,19 +122,18 @@ data.load(filename="excel.xls", range="Etable", format='set', set='E')
 data.load(filename="excel.xls", range="Itable", format='set', set='I')
 data.load(filename="excel.xls", range="Zparam", format='param', param='Z')
 data.load(filename="excel.xls", range="Ytable", index='A', param='Y')
-data.load(filename="excel.xls", range="XWtable", index='A', param=['X','W'])
+data.load(filename="excel.xls", range="XWtable", index='A', param=['X', 'W'])
 data.load(filename="excel.xls", range="Ttable", param='T', format='transposed_array')
 data.load(filename="excel.xls", range="Utable", param='U', format='array')
 data.load(filename="excel.xls", range="Stable", index='A', param='S')
-data.load(filename="excel.xls", range="RQtable", index='H', param=('R','Q'))
-data.load(filename="excel.xls", range="POtable", index='J', param=('P','O'))
-data.load(filename="excel.xls", range="PPtable", index=('A','B'), param="PP")
+data.load(filename="excel.xls", range="RQtable", index='H', param=('R', 'Q'))
+data.load(filename="excel.xls", range="POtable", index='J', param=('P', 'O'))
+data.load(filename="excel.xls", range="PPtable", index=('A', 'B'), param="PP")
 
-#try:
+# try:
 #    data.read()
-#except pyomo.ApplicationError:
+# except pyomo.ApplicationError:
 #    sys.exit(0)
- 
+
 instance = model.create_instance(data)
 instance.pprint()
-

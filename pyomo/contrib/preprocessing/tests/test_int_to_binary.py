@@ -1,14 +1,14 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 """Tests the integer to binary variable reformulation."""
+
 import pyomo.common.unittest as unittest
 from pyomo.environ import ConcreteModel, Var, Integers, value
 from pyomo.environ import TransformationFactory as xfrm
@@ -16,6 +16,7 @@ from pyomo.common.log import LoggingIntercept
 
 import logging
 from io import StringIO
+
 
 class TestIntToBinary(unittest.TestCase):
     """Tests integer to binary variable reformulation."""
@@ -26,7 +27,10 @@ class TestIntToBinary(unittest.TestCase):
         output = StringIO()
         with LoggingIntercept(output, 'pyomo.contrib.preprocessing', logging.INFO):
             xfrm('contrib.integer_to_binary').apply_to(m)
-        self.assertIn("Reformulating integer variables using the base2 strategy.", output.getvalue())
+        self.assertIn(
+            "Reformulating integer variables using the base2 strategy.",
+            output.getvalue(),
+        )
         reform_blk = m._int_to_binary_reform
         self.assertEqual(len(reform_blk.int_var_set), 1)
         reform_blk.new_binary_var[0, 0].value = 1

@@ -1,17 +1,17 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import pyomo.kernel as pmo
 from pyomo.core import ConcreteModel, Var, Objective
 from pyomo.opt import TerminationCondition
 from pyomo.solvers.tests.models.base import _BaseTestModel, register_model
+
 
 @register_model
 class LP_unbounded(_BaseTestModel):
@@ -25,7 +25,7 @@ class LP_unbounded(_BaseTestModel):
     def __init__(self):
         _BaseTestModel.__init__(self)
         self.solve_should_fail = True
-        self.add_results(self.description+".json")
+        self.add_results(self.description + ".json")
 
     def _generate_model(self):
         self.model = ConcreteModel()
@@ -35,7 +35,7 @@ class LP_unbounded(_BaseTestModel):
         model.x = Var()
         model.y = Var()
 
-        model.o = Objective(expr=model.x+model.y)
+        model.o = Objective(expr=model.x + model.y)
 
     def warmstart_model(self):
         assert self.model is not None
@@ -44,18 +44,21 @@ class LP_unbounded(_BaseTestModel):
         model.y.value = None
 
     def post_solve_test_validation(self, tester, results):
+        outcomes = [
+            TerminationCondition.unbounded,
+            TerminationCondition.infeasibleOrUnbounded,
+        ]
+        if '_gams_' in str(tester):
+            # GAMS maps CPLEX's InfeasibleOrUnbounded to Infeasible
+            outcomes.append(TerminationCondition.infeasible)
         if tester is None:
-            assert results['Solver'][0]['termination condition'] in \
-                (TerminationCondition.unbounded,
-                 TerminationCondition.infeasibleOrUnbounded)
+            assert results['Solver'][0]['termination condition'] in outcomes
         else:
-            tester.assertIn(results['Solver'][0]['termination condition'],
-                            (TerminationCondition.unbounded,
-                             TerminationCondition.infeasibleOrUnbounded))
+            tester.assertIn(results['Solver'][0]['termination condition'], outcomes)
+
 
 @register_model
 class LP_unbounded_kernel(LP_unbounded):
-
     def _generate_model(self):
         self.model = pmo.block()
         model = self.model
@@ -64,4 +67,4 @@ class LP_unbounded_kernel(LP_unbounded):
         model.x = pmo.variable()
         model.y = pmo.variable()
 
-        model.o = pmo.objective(model.x+model.y)
+        model.o = pmo.objective(model.x + model.y)

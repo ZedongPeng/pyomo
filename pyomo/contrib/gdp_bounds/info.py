@@ -1,4 +1,14 @@
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
 """Provides functions for retrieving disjunctive variable bound information stored on a model."""
+
 from pyomo.common.collections import ComponentMap
 from pyomo.core import value
 
@@ -23,10 +33,10 @@ def disjunctive_bound(var, scope):
     """Compute the disjunctive bounds for a variable in a given scope.
 
     Args:
-        var (_VarData): Variable for which to compute bound
+        var (VarData): Variable for which to compute bound
         scope (Component): The scope in which to compute the bound. If not a
-            _DisjunctData, it will walk up the tree and use the scope of the
-            most immediate enclosing _DisjunctData.
+            DisjunctData, it will walk up the tree and use the scope of the
+            most immediate enclosing DisjunctData.
 
     Returns:
         numeric: the tighter of either the disjunctive lower bound, the
@@ -36,14 +46,13 @@ def disjunctive_bound(var, scope):
     # Initialize to the global variable bound
     var_bnd = (
         value(var.lb) if var.has_lb() else -inf,
-        value(var.ub) if var.has_ub() else inf)
+        value(var.ub) if var.has_ub() else inf,
+    )
     possible_disjunct = scope
     while possible_disjunct is not None:
         try:
             disj_bnd = possible_disjunct._disj_var_bounds.get(var, (-inf, inf))
-            disj_bnd = (
-                max(var_bnd[0], disj_bnd[0]),
-                min(var_bnd[1], disj_bnd[1]))
+            disj_bnd = (max(var_bnd[0], disj_bnd[0]), min(var_bnd[1], disj_bnd[1]))
             return disj_bnd
         except AttributeError:
             # possible disjunct does not have attribute '_disj_var_bounds'.

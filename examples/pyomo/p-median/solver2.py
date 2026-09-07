@@ -1,23 +1,22 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 # Imports from Pyomo
-from pyomo.core import *
-from pyomo.common.plugin import *
-from pyomo.opt import *
+import pyomo.environ as pyo
+from pyomo.common.plugin_base import alias, implements
+from pyomo.opt import SolverStatus, SolutionStatus, ProblemSense
 import random
 import copy
 
-@plugin_factory
-class MySolver(object):
 
+@plugin_factory
+class MySolver:
     alias('random')
 
     # Declare that this is an IOptSolver plugin
@@ -28,9 +27,9 @@ class MySolver(object):
     def solve(self, instance, **kwds):
         print("Starting random heuristic")
         val, sol = self._random(instance)
-        n = value(instance.N)
+        n = pyo.value(instance.N)
         # Setup results
-        results = SolverResults()
+        results = pyo.SolverResults()
         results.problem.name = instance.name
         results.problem.sense = ProblemSense.minimize
         results.problem.num_constraints = 1
@@ -40,14 +39,14 @@ class MySolver(object):
         soln = results.solution.add()
         soln.value = val
         soln.status = SolutionStatus.feasible
-        for j in sequence(n):
-            soln.variable[instance.y[j].name] = {"Value" : sol[j-1], "Id" : j}
+        for j in pyo.sequence(n):
+            soln.variable[instance.y[j].name] = {"Value": sol[j - 1], "Id": j}
         # Return results
         return results
 
     # Perform a random search
     def _random(self, instance):
-        sol = [0]*instance.N.value
+        sol = [0] * instance.N.value
         for j in range(instance.P.value):
             sol[j] = 1
         # Generate 100 random solutions, and keep the best
@@ -56,12 +55,16 @@ class MySolver(object):
         for kk in range(100):
             random.shuffle(sol)
             # Compute value
-            val=0.0
-            for j in sequence(instance.M.value):
-                val += min([instance.d[i,j].value
-                            for i in sequence(instance.N.value)
-                            if sol[i-1] == 1])
+            val = 0.0
+            for j in pyo.sequence(instance.M.value):
+                val += min(
+                    [
+                        instance.d[i, j].value
+                        for i in pyo.sequence(instance.N.value)
+                        if sol[i - 1] == 1
+                    ]
+                )
             if best is None or val < best:
-                best=val
-                best_sol=copy.copy(sol)
+                best = val
+                best_sol = copy.copy(sol)
         return [best, best_sol]

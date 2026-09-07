@@ -1,20 +1,19 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import sys
 from io import StringIO
 from pyomo.common.log import LoggingIntercept
 from pyomo.common.tee import capture_output
+from pyomo.repn.tests.lp_diff import lp_diff
 
-_baseline = """
-\\* Source Pyomo model name=unknown *\\
+_baseline = r"""\* Source Pyomo model name=unknown *\
 
 min
 x2:
@@ -36,31 +35,35 @@ bounds
 end
 """
 
+
 def _check_log_and_out(LOG, OUT, offset, msg=None):
     sys.stdout.flush()
     sys.stderr.flush()
     msg = str(msg) + ': ' if msg else ''
     if LOG.getvalue():
         raise RuntimeError(
-            "FAIL: %sMessage logged to the Logger:\n>>>\n%s<<<" % (
-                msg, LOG.getvalue(),))
+            "FAIL: %sMessage logged to the Logger:\n>>>\n%s<<<" % (msg, LOG.getvalue())
+        )
 
     if OUT.getvalue():
         raise RuntimeError(
-            "FAIL: %sMessage sent to stdout/stderr:\n>>>\n%s<<<" % (
-                msg, OUT.getvalue(),))
+            "FAIL: %sMessage sent to stdout/stderr:\n>>>\n%s<<<" % (msg, OUT.getvalue())
+        )
 
 
 def import_pyomo_environ():
     with LoggingIntercept() as LOG, capture_output(capture_fd=True) as OUT:
         import pyomo.environ as pyo
+
         globals()['pyo'] = pyo
     _check_log_and_out(LOG, OUT, 0)
+
 
 def run_writer_test():
     with LoggingIntercept() as LOG, capture_output(capture_fd=True) as OUT:
         # Enumerate the writers...
         from pyomo.opt import WriterFactory
+
         info = []
         for writer in sorted(WriterFactory):
             info.append("  %s: %s" % (writer, WriterFactory.doc(writer)))
@@ -78,16 +81,19 @@ def run_writer_test():
         m.o = pyo.Objective(expr=m.x**2)
 
         from pyomo.common.tempfiles import TempfileManager
+
         with TempfileManager:
-            fname = TempfileManager.create_tempfile(suffix='pyomo.lp')
-            m.write(fname)
+            fname = TempfileManager.create_tempfile(suffix='pyomo.lp_v1')
+            m.write(fname, format='lp_v1')
             with open(fname, 'r') as FILE:
                 data = FILE.read()
 
-    if not all(d.strip() == b.strip() for d,b in zip(
-            data.strip().splitlines(), _baseline.strip().splitlines())):
-        print("Result did not match baseline.\nRESULT:\n%s\nBASELINE:\n%s"
-              % (data, _baseline))
+    base, test = lp_diff(_baseline, data)
+    if base != test:
+        print(
+            "Result did not match baseline.\nRESULT:\n%s\nBASELINE:\n%s"
+            % (data, _baseline)
+        )
         print(data.strip().splitlines())
         print(_baseline.strip().splitlines())
         sys.exit(2)
@@ -96,12 +102,7 @@ def run_writer_test():
 
 
 def run_solverfactory_test():
-    skip_solvers = {
-        'py',
-        'xpress',
-        '_xpress_shell',
-        '_mock_xpress',
-    }
+    skip_solvers = {'py', 'xpress', '_xpress_shell', '_mock_xpress'}
 
     with LoggingIntercept() as LOG, capture_output(capture_fd=True) as OUT:
         info = []
@@ -114,7 +115,7 @@ def run_solverfactory_test():
             else:
                 _avail = str(pyo.SolverFactory(solver).available(False))
             info.append("   %s(%s): %s" % (solver, _avail, _doc))
-            #_check_log_and_out(LOG, OUT, 20, solver)
+            # _check_log_and_out(LOG, OUT, 20, solver)
 
         glpk = pyo.SolverFactory('glpk')
 
@@ -142,15 +143,13 @@ def run_transformationfactory_test():
 
         bigm = pyo.TransformationFactory('gdp.bigm')
 
-
     print("")
     print("Pyomo Transformations")
     print("---------------------")
     print('\n'.join(info))
 
     if not isinstance(bigm, pyo.Transformation):
-        print("TransformationFactory(gdp.bigm) did not return a "
-              "transformation")
+        print("TransformationFactory(gdp.bigm) did not return a transformation")
         sys.exit(4)
 
     _check_log_and_out(LOG, OUT, 30)

@@ -8,34 +8,34 @@ We begin by importing the Pyomo package and creating an object of the type Model
 
 {{{
 #!python
-from pyomo.core import *
+import pyomo.environ as pyo
 
-model = AbstractModel()
+model = pyo.AbstractModel()
 }}}
 
-The next step is to define our sets that are being acted upon.  The warehouses have a supply and the stores have demand, so those two make sense as sets (with supply and demand parameters that rely on them).  Each route will have an associated cost, so we could create a set of routes.  However, it's more efficent (and easier to read) to make the costs a parameter over two set, the warehouses and the stores, so we will only need to define those two sets.
+The next step is to define our sets that are being acted upon.  The warehouses have a supply and the stores have demand, so those two make sense as sets (with supply and demand parameters that rely on them).  Each route will have an associated cost, so we could create a set of routes.  However, it's more efficient (and easier to read) to make the costs a parameter over two set, the warehouses and the stores, so we will only need to define those two sets.
 
 {{{
 #!python
-model.warehouses = Set()
-model.stores = Set()
+model.warehouses = pyo.Set()
+model.stores = pyo.Set()
 }}}
 
 As outlined above, we also have several parameters to take into account: supply, demand and costs  We input these similar to how we did it in the diet problem.
 
 {{{
 #!python
-model.supply = Param(model.warehouses)
-model.demand = Param(model.stores)
-model.costs = Param(model.warehouses, model.stores)
+model.supply = pyo.Param(model.warehouses)
+model.demand = pyo.Param(model.stores)
+model.costs = pyo.Param(model.warehouses, model.stores)
 }}}
-Note once again that the costs are a parameter of two dimesnions since it takes in two arguments.  
+Note once again that the costs are a parameter of two dimensions since it takes in two arguments.  
 
 We have one final addition to make: the variable to solve for.  We're looking for the amount of goods to be sent from each warehouse to each store, so we create a variable over the set of warehouses and the set of stores that determines how much will be shipped from each warehouse to each store.  This is slightly different than in the diet problem, where our variable was just over one set, but the difference is minor in the implementation.
 
 {{{
 #!python
-model.amounts = Var(model.warehouses, model.stores, within = NonNegativeReals)
+model.amounts = pyo.Var(model.warehouses, model.stores, within = pyo.NonNegativeReals)
 }}}
 We restrict our solutions to be the non-negative reals as otherwise the solution is likely to be illogical and useless---it could involve shipping negative amounts of supplies to gain money, for example.
 
@@ -50,7 +50,7 @@ def costRule(model):
        for i in model.stores
     )
 
-model.cost=Objective(rule=costRule)
+model.cost=pyo.Objective(rule=costRule)
 }}}
 It's worth looking at what's happning here a bit more in-depth.  The line 
 {{{
@@ -66,7 +66,7 @@ Now we must construct our constraints.  In this example we only have two, and th
 def minDemandRule(store, model):
     return sum(model.amounts[i, store] for i in model.warehouses) >= model.demand[store]
 
-model.demandConstraint = Constraint(model.stores, 
+model.demandConstraint = pyo.Constraint(model.stores, 
     rule=minDemandRule)
 }}}
 By inputting the set "stores" into the constraint, it tells the constraint to run this rule for each element of "stores."  What will happen is the rule will look at each store individually to insure the amount flowing into it exceeds the store's demands.  We construct the supply rule in a similar fashion.
@@ -76,7 +76,7 @@ By inputting the set "stores" into the constraint, it tells the constraint to ru
 def maxSupplyRule(warehouse, model):
     return sum(model.amounts[warehouse, j] for j in model.stores) <= model.supply[warehouse]
 
-model.supplyConstraint = Constraint(model.warehouses, rule=maxSupplyRule)
+model.supplyConstraint = pyo.Constraint(model.warehouses, rule=maxSupplyRule)
 }}}
 
 We have now finished constructing our transportation model, which we save as transportation.py.  (That period is the end of a sentence, not part of the file name).  The next step is to create a data file.
@@ -90,7 +90,7 @@ set warehouses := quick brown fox;
 set stores := jumps over the lazy dog;
 }}}
 
-Now we need to define the supply and demand parameters on these two sets.  Fortunately, they're done very similarly to each other with the main difference being which set the parameter is indexed over.  Otherwise, the notation is simple: put "param: [name of parameter] :=" on the first line, than an elment of the set and its associated value on each subsequent line.  Don't forget to end with a semi-colon.
+Now we need to define the supply and demand parameters on these two sets.  Fortunately, they're done very similarly to each other with the main difference being which set the parameter is indexed over.  Otherwise, the notation is simple: put "param: [name of parameter] :=" on the first line, than an element of the set and its associated value on each subsequent line.  Don't forget to end with a semi-colon.
 
 {{{
 param: supply :=
@@ -121,7 +121,7 @@ Now that we're done inputting the data, save this file as a .dat file.  Once tha
 
 == Solution ==
 
-On Linux, through the comand line input "pyomo [filename].py [filename].dat".  If using the files from the Pyomo page, for example, input "pyomo transportation.py transportation.dat" and let the program run.
+On Linux, through the command line input "pyomo [filename].py [filename].dat".  If using the files from the Pyomo page, for example, input "pyomo transportation.py transportation.dat" and let the program run.
 
 Pretty quickly the program will crash saying the model is infeasible.  What happened?  Look back at the data used, specifically the supply and demand data.  In total, we have 11000 supply, but we have 11500 demand--our demand exceeds our supply.  Thus, it's impossible for this model to work: we can't supply all of the stores to meet their demand.  This means the model is infeasible.
 

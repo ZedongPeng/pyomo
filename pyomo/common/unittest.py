@@ -1,44 +1,58 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 #
-#  Part of this module was originally developed as part of the PyUtilib project
-#  Copyright (c) 2008 Sandia Corporation.
-#  This software is distributed under the BSD License.
-#  Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
-#  the U.S. Government retains certain rights in this software.
-#  ___________________________________________________________________________
+# Part of this module was originally developed as part of the PyUtilib project
+# Copyright (c) 2008 Sandia Corporation.
+# This software is distributed under the BSD License.
+# Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+# the U.S. Government retains certain rights in this software.
+# ____________________________________________________________________________________
 
 import enum
+import glob
 import logging
-import sys
+import math
 import os
-import argparse
+import operator
+import re
 import subprocess
+import sys
 from io import StringIO
-
 
 # Now, import the base unittest environment.  We will override things
 # specifically later
 from unittest import *
 import unittest as _unittest
+import pyomo.common.dependencies as deps
 
 from pyomo.common.collections import Mapping, Sequence
+from pyomo.common.dependencies import attempt_import, check_min_version, multiprocessing
+from pyomo.common.errors import InvalidValueError
+from pyomo.common.fileutils import import_file
+from pyomo.common.log import LoggingIntercept, pyomo_formatter
 from pyomo.common.tee import capture_output
-
-# This augments the unittest exports with two additional decorators
-__all__ = _unittest.__all__ + ['category', 'nottest']
 
 from unittest import mock
 
+# We defer this import so that we don't add a hard dependence on pytest.
+# Note that importing test modules may cause this import to be resolved
+# (and then enforce a strict dependence on pytest)
+pytest, pytest_available = attempt_import('pytest')
+
+#: A time limit for acquiring the capture_output_lock lock
+#: before terminating a subprocess
+_timeout_terminate_timeout = 2  # seconds
+
+
 def _defaultFormatter(msg, default):
     return msg or default
+
 
 def _floatOrCall(val):
     """Cast the value to float, if that fails call it and then cast.
@@ -52,16 +66,32 @@ def _floatOrCall(val):
     """
     try:
         return float(val)
-    except TypeError:
+    except (TypeError, InvalidValueError):
+        pass
+    try:
         return float(val())
+    except (TypeError, InvalidValueError):
+        pass
+    try:
+        return val.value
+    except AttributeError:
+        # likely a complex
+        return val
 
-def assertStructuredAlmostEqual(first, second,
-                                places=None, msg=None, delta=None,
-                                reltol=None, abstol=None,
-                                allow_second_superset=False,
-                                item_callback=_floatOrCall,
-                                exception=ValueError,
-                                formatter=_defaultFormatter):
+
+def assertStructuredAlmostEqual(
+    first,
+    second,
+    places=None,
+    msg=None,
+    delta=None,
+    reltol=None,
+    abstol=None,
+    allow_second_superset=False,
+    item_callback=_floatOrCall,
+    exception=ValueError,
+    formatter=_defaultFormatter,
+):
     """Test that first and second are equal up to a tolerance
 
     This compares first and second using both an absolute (`abstol`) and
@@ -87,10 +117,12 @@ def assertStructuredAlmostEqual(first, second,
         values)
 
     The relative error is computed for numerical values as
-        `abs(first - second) / max(abs(first), abs(second))`,
-    only when first != second (thereby avoiding divide-by-zero errors).
 
-    Items (entries other than Sequence / Mapping containters, matching
+        `abs(first - second) / max(abs(first), abs(second))`
+
+    only when `first != second` (thereby avoiding divide-by-zero errors).
+
+    Items (entries other than Sequence / Mapping containers, matching
     strings, and items that satisfy `first is second`) are passed to the
     `item_callback` before testing equality and relative tolerances.
 
@@ -99,47 +131,56 @@ def assertStructuredAlmostEqual(first, second,
 
     Parameters
     ----------
-    first:
+    first :
         the first value to compare
-    second:
+
+    second :
         the second value to compare
-    places: int
+
+    places : int
         `first` and `second` are considered equivalent if their
         difference is between `places` decimal places; equivalent to
         `abstol = 10**-places` (included for compatibility with
         assertAlmostEqual)
-    msg: str
+
+    msg : str
         the message to raise on failure
-    delta: float
+
+    delta : float
         alias for `abstol`
-    abstol: float
+
+    abstol : float
         the absolute tolerance.  `first` and `second` are considered
         equivalent if their absolute difference is less than `abstol`
-    reltol: float
+
+    reltol : float
         the relative tolerance.  `first` and `second` are considered
         equivalent if their absolute difference divided by the
         largest of `first` and `second` is less than `reltol`
-    allow_second_superset: bool
+
+    allow_second_superset : bool
         If True, then extra entries in containers found on second
         will not trigger a failure.
-    item_callback: function
+
+    item_callback : function
         items (other than Sequence / Mapping containers, matching
         strings, and items satisfying `is`) are passed to this callback
         to generate the (nominally floating point) value to use for
         comparison.
-    exception: Exception
+
+    exception : Exception
         exception to raise when `first` is not 'almost equal' to `second`.
-    formatter: function
+
+    formatter : function
         callback for generating the final failure message (for
         compatibility with unittest)
 
     """
     if sum(1 for _ in (places, delta, abstol) if _ is not None) > 1:
-        raise ValueError("Cannot specify more than one of "
-                         "{places, delta, abstol}")
+        raise ValueError("Cannot specify more than one of {places, delta, abstol}")
 
     if places is not None:
-        abstol = 10**(-places)
+        abstol = 10 ** (-places)
     if delta is not None:
         abstol = delta
     if abstol is None and reltol is None:
@@ -148,28 +189,36 @@ def assertStructuredAlmostEqual(first, second,
     fail = None
     try:
         _assertStructuredAlmostEqual(
-            first, second, abstol, reltol, not allow_second_superset,
-            item_callback, exception)
+            first,
+            second,
+            abstol,
+            reltol,
+            not allow_second_superset,
+            item_callback,
+            exception,
+        )
     except exception as e:
         fail = formatter(
             msg,
             "%s\n    Found when comparing with tolerance "
             "(abs=%s, rel=%s):\n"
-            "        first=%s\n        second=%s" % (
+            "        first=%s\n        second=%s"
+            % (
                 str(e),
                 abstol,
                 reltol,
                 _unittest.case.safe_repr(first),
                 _unittest.case.safe_repr(second),
-            ))
+            ),
+        )
 
     if fail:
         raise exception(fail)
 
 
-def _assertStructuredAlmostEqual(first, second,
-                                 abstol, reltol, exact,
-                                 item_callback, exception):
+def _assertStructuredAlmostEqual(
+    first, second, abstol, reltol, exact, item_callback, exception
+):
     """Recursive implementation of assertStructuredAlmostEqual"""
 
     args = (first, second)
@@ -177,46 +226,49 @@ def _assertStructuredAlmostEqual(first, second,
     if all(isinstance(_, Mapping) for _ in args):
         if exact and len(first) != len(second):
             raise exception(
-                "mappings are different sizes (%s != %s)" % (
-                    len(first),
-                    len(second),
-                ))
+                "mappings are different sizes (%s != %s)" % (len(first), len(second))
+            )
         for key in first:
             if key not in second:
                 raise exception(
-                    "key (%s) from first not found in second" % (
-                        _unittest.case.safe_repr(key),
-                    ))
+                    "key (%s) from first not found in second"
+                    % (_unittest.case.safe_repr(key),)
+                )
             try:
                 _assertStructuredAlmostEqual(
-                    first[key], second[key], abstol, reltol, exact,
-                    item_callback, exception)
+                    first[key],
+                    second[key],
+                    abstol,
+                    reltol,
+                    exact,
+                    item_callback,
+                    exception,
+                )
             except exception as e:
                 raise exception(
-                    "%s\n    Found when comparing key %s" % (
-                        str(e), _unittest.case.safe_repr(key)))
-        return # PASS!
+                    "%s\n    Found when comparing key %s"
+                    % (str(e), _unittest.case.safe_repr(key))
+                )
+        return  # PASS!
 
     elif any(isinstance(_, str) for _ in args):
         if first == second:
-            return # PASS!
+            return  # PASS!
 
     elif all(isinstance(_, Sequence) for _ in args):
         # Note that Sequence includes strings
         if exact and len(first) != len(second):
             raise exception(
-                "sequences are different sizes (%s != %s)" % (
-                    len(first),
-                    len(second),
-                ))
+                "sequences are different sizes (%s != %s)" % (len(first), len(second))
+            )
         for i, (f, s) in enumerate(zip(first, second)):
             try:
                 _assertStructuredAlmostEqual(
-                    f, s, abstol, reltol, exact, item_callback, exception)
+                    f, s, abstol, reltol, exact, item_callback, exception
+                )
             except exception as e:
-                raise exception(
-                    "%s\n    Found at position %s" % (str(e), i))
-        return # PASS!
+                raise exception("%s\n    Found at position %s" % (str(e), i))
+        return  # PASS!
 
     else:
         # Catch things like None, which may cause problems for the
@@ -227,7 +279,7 @@ def _assertStructuredAlmostEqual(first, second,
         # the values to be comparable.
         try:
             if first is second or first == second:
-                return # PASS!
+                return  # PASS!
         except:
             pass
         try:
@@ -237,9 +289,11 @@ def _assertStructuredAlmostEqual(first, second,
                 return
             diff = abs(f - s)
             if abstol is not None and diff <= abstol:
-                return # PASS!
+                return  # PASS!
             if reltol is not None and diff / max(abs(f), abs(s)) <= reltol:
-                return # PASS!
+                return  # PASS!
+            if math.isnan(f) and math.isnan(s):
+                return  # PASS! (we will treat NaN as equal)
         except:
             pass
 
@@ -256,109 +310,65 @@ def _assertStructuredAlmostEqual(first, second,
     raise exception(msg)
 
 
-def _category_to_tuple(_cat):
-    _cat = str(_cat).lower().strip()
-    if _cat.endswith('=0') or _cat.endswith('=1'):
-        _val = int(_cat[-1])
-        _cat = _cat[:-2]
-    else:
-        _val = 1
-    if _cat and _cat[0] in '!~-':
-        _val = 1 - _val
-        _cat = _cat[1:]
-    return _cat, _val
-
-def category(*args, **kwargs):
-    # Get the set of categories for this test
-    _categories = {}
-    for cat in args:
-        _cat, _val = _category_to_tuple(cat)
-        if not _cat:
-            continue
-        _categories[_cat] = _val
-
-    # Note: we used to try and short-circuit the nosetest test selection
-    # and return test skips for tests that couldn't/wouldn't be run.
-    # However, this code was unreliable, as categories could be set by
-    # both decorating the TestCase (class) and the function.  As a
-    # result, we will just rely on nosetest to do the right thing.
-
-    def _id(func):
-        if hasattr(func, '__mro__') and TestCase in func.__mro__:
-            # @category() called on a TestCase class
-            if len(_categories) > (1 if 'fragile' in _categories else 0):
-                for c,v in func.unspecified_categories.items():
-                    setattr(func, c, v)
-                    _categories.setdefault(c, v)
-            default_updates = {}
-            for c,v in _categories.items():
-                if c in func.unspecified_categories:
-                    default_updates[c] = v
-                setattr(func, c, v)
-            if default_updates:
-                for fcn in func.__dict__.values():
-                    if hasattr(fcn, '_categories'):
-                        for c,v in default_updates.items():
-                            if c not in fcn._categories:
-                                setattr(fcn, c, v)
-        else:
-            # This is a (currently unbound) method definition
-            if len(_categories) > (1 if 'fragile' in _categories else 0):
-                for c,v in TestCase.unspecified_categories.items():
-                    setattr(func, c, v)
-            for c,v in _categories.items():
-                setattr(func, c, v)
-            setattr(func, '_categories', _categories)
-        return func
-    return _id
-
-
-try:
-    from nose.tools import nottest
-except ImportError:
-
-    def nottest(func):
-        """Decorator to mark a function or method as *not* a test"""
-        func.__test__ = False
-        return func
-
-
-def _runner(q, qualname):
+def _runner(pipe, qualname):
     "Utility wrapper for running functions, used by timeout()"
     resultType = _RunnerResult.call
-    if q in _runner.data:
-        fcn, args, kwargs = _runner.data[q]
+    if pipe in _runner.data:
+        fcn, args, kwargs = _runner.data[pipe]
     elif isinstance(qualname, str):
         # Use unittest to instantiate the TestCase and run it
         resultType = _RunnerResult.unittest
+
         def fcn():
-            s = _unittest.TestLoader().loadTestsFromName(qualname)
-            r = _unittest.TestResult()
-            s.run(r)
-            return r.errors + r.failures, r.skipped
+            suite = _unittest.TestLoader().loadTestsFromName(qualname)
+            result = _unittest.TestResult()
+            # Starting in Python 3.14, the default interface is
+            # forkserver, so timeout will fall back on spawn (getting us
+            # here).  Unfortunately, starting in pytest 9.0, if the
+            # test is expecting to fail, pytest will completely suppress
+            # recording the failure from the subTest, causing the main
+            # test to unexpectedly succeed.  We will resolve this by
+            # looking at the testmethod we just loaded and if we are
+            # expecting a failure, then we will turn that off *in the
+            # subTest* so that the result is properly propagated.
+            for test in suite:
+                test.__unittest_expecting_failure__ = False
+                # Note: fetch the unbound function off the class and not
+                # the bound method.
+                func = getattr(test.__class__, test._testMethodName)
+                if hasattr(func, '__unittest_expecting_failure__'):
+                    delattr(func, '__unittest_expecting_failure__')
+            # Now we can actually run the test (including all necessary
+            # setUp/tearDown)
+            suite.run(result)
+            return result.errors + result.failures, result.skipped
+
         args = ()
         kwargs = {}
     else:
         qualname, fcn, args, kwargs = qualname
     _runner.data[qualname] = None
-    OUT = StringIO()
     try:
-        with capture_output(OUT):
+        with capture_output() as OUT:
             result = fcn(*args, **kwargs)
-        q.put((resultType, result, OUT.getvalue()))
+        pipe.send((resultType, result, OUT.getvalue()))
     except:
         import traceback
+
         etype, e, tb = sys.exc_info()
         if not isinstance(e, AssertionError):
-            e = etype("%s\nOriginal traceback:\n%s" % (
-                e, ''.join(traceback.format_tb(tb))))
-        q.put((_RunnerResult.exception, e, OUT.getvalue()))
+            e = etype(
+                "%s\nOriginal traceback:\n%s" % (e, ''.join(traceback.format_tb(tb)))
+            )
+        pipe.send((_RunnerResult.exception, e, OUT.getvalue()))
     finally:
         _runner.data.pop(qualname)
+
 
 # Data structure for passing functions/arguments to the _runner
 # without forcing them to be pickled / unpickled
 _runner.data = {}
+
 
 class _RunnerResult(enum.Enum):
     exception = 0
@@ -374,7 +384,7 @@ def timeout(seconds, require_fork=False, timeout_raises=TimeoutError):
     using multiprocessing to execute the function in a forked process.
     If the wrapped function raises an exception, then the exception will
     be re-raised in this process.  If the function times out, a
-    :python:`TimeoutError` will be raised.
+    :class:`TimeoutError` will be raised.
 
     Note that as this method uses multiprocessing, the wrapped function
     should NOT spawn any subprocesses.  The timeout is implemented using
@@ -396,78 +406,118 @@ def timeout(seconds, require_fork=False, timeout_raises=TimeoutError):
 
     Examples
     --------
-    >>> import pyomo.common.unittest as unittest
-    >>> @unittest.timeout(1)
-    ... def test_function():
-    ...     return 42
-    >>> test_function()
-    42
+    .. doctest::
+       :skipif: multiprocessing.get_start_method() != 'fork'
 
-    >>> @unittest.timeout(0.01)
-    ... def test_function():
-    ...     while 1:
-    ...         pass
-    >>> test_function()
-    Traceback (most recent call last):
-        ...
-    TimeoutError: test timed out after 0.01 seconds
+       >>> import pyomo.common.unittest as unittest
+       >>> @unittest.timeout(1)
+       ... def test_function():
+       ...     return 42
+       >>> test_function()
+       42
+
+    .. doctest::
+       :skipif: multiprocessing.get_start_method() != 'fork'
+
+       >>> @unittest.timeout(0.01)
+       ... def test_function():
+       ...     while 1:
+       ...         pass
+       >>> test_function()
+       Traceback (most recent call last):
+           ...
+       TimeoutError: test timed out after 0.01 seconds
 
     """
     import functools
-    import multiprocessing
     import queue
+
     def timeout_decorator(fcn):
         @functools.wraps(fcn)
         def test_timer(*args, **kwargs):
             qualname = '%s.%s' % (fcn.__module__, fcn.__qualname__)
+            # If qualname is in the data dict, then we are in the child
+            # process and are being asked to run the wrapped function.
             if qualname in _runner.data:
                 return fcn(*args, **kwargs)
+            # Parent process: spawn a subprocess to execute the wrapped
+            # function and monitor for timeout
             if require_fork and multiprocessing.get_start_method() != 'fork':
                 raise _unittest.SkipTest(
-                    "timeout requires unavailable fork interface")
+                    "timeout() requires unavailable fork interface"
+                )
 
-            q = multiprocessing.Queue()
+            pipe_recv, pipe_send = multiprocessing.Pipe(False)
             if multiprocessing.get_start_method() == 'fork':
                 # Option 1: leverage fork if possible.  This minimizes
                 # the reliance on serialization and ensures that the
                 # wrapped function operates in the same environment.
-                _runner.data[q] = (fcn, args, kwargs)
-                runner_args = (q, qualname)
-            elif (args and fcn.__name__.startswith('test')
-                  and _unittest.case.TestCase in args[0].__class__.__mro__):
+                _runner.data[pipe_send] = (fcn, args, kwargs)
+                runner_arg = qualname
+            elif (
+                args
+                and fcn.__name__.startswith('test')
+                and _unittest.case.TestCase in args[0].__class__.__mro__
+            ):
                 # Option 2: this is wrapping a unittest.  Re-run
                 # unittest in the child process with this function as
                 # the sole target.  This ensures that things like setUp
                 # and tearDown are correctly called.
-                runner_args = (q, qualname)
+                runner_arg = qualname
             else:
                 # Option 3: attempt to serialize the function and all
                 # arguments and send them to the (spawned) child
                 # process.  The wrapped function cannot count on any
                 # environment configuration that it does not set up
                 # itself.
-                runner_args = (q, (qualname, test_timer, args, kwargs))
+                runner_arg = (qualname, test_timer, args, kwargs)
             test_proc = multiprocessing.Process(
-                target=_runner, args=runner_args)
+                target=_runner, args=(pipe_send, runner_arg)
+            )
+            # Set daemon: if the parent process is killed, the child
+            # process should be killed and collected.
             test_proc.daemon = True
             try:
                 test_proc.start()
             except:
-                if type(runner_args[1]) is tuple:
+                if type(runner_arg) is tuple:
                     logging.getLogger(__name__).error(
-                        "Exception raised spawning timeout subprocess "
+                        "Exception raised spawning timeout() subprocess "
                         "on a platform that does not support 'fork'.  "
                         "It is likely that either the wrapped function or "
-                        "one of its arguments is not serializable")
+                        "one of its arguments is not serializable"
+                    )
                 raise
             try:
-                resultType, result, stdout = q.get(True, seconds)
-            except queue.Empty:
-                test_proc.terminate()
-                raise timeout_raises(
-                    "test timed out after %s seconds" % (seconds,)) from None
+                if pipe_recv.poll(seconds):
+                    resultType, result, stdout = pipe_recv.recv()
+                else:
+                    # Note: because we are using capture_output within
+                    # the _runner handler, we can trigger a deadlock
+                    # when we call terminate() while the _runner's
+                    # capture_output holds the capture_output_lock lock
+                    # (terminate() bypasses all __exit__ handlers!).  To
+                    # avoid that, we will grab the lock here before
+                    # terminating the subprocess.
+                    locked = deps.capture_output_lock.acquire(
+                        timeout=_timeout_terminate_timeout
+                    )
+                    if not locked:
+                        logging.getLogger(__name__).error(
+                            "Failed to acquire capture_output_lock "
+                            "Lock before terminating subprocess on timeout: "
+                            "process deadlock is likely."
+                        )
+                    try:
+                        test_proc.terminate()
+                    finally:
+                        if locked:
+                            deps.capture_output_lock.release()
+                    raise timeout_raises(
+                        "test timed out after %s seconds" % (seconds,)
+                    ) from None
             finally:
-                _runner.data.pop(q, None)
+                _runner.data.pop(pipe_send, None)
             sys.stdout.write(stdout)
             test_proc.join()
             if resultType == _RunnerResult.call:
@@ -481,8 +531,28 @@ def timeout(seconds, require_fork=False, timeout_raises=TimeoutError):
                         args[0].skipTest(msg)
             else:
                 raise result
+
         return test_timer
+
     return timeout_decorator
+
+
+class _AssertRaisesContext_NormalizeWhitespace(_unittest.case._AssertRaisesContext):
+    def __exit__(self, exc_type, exc_value, tb):
+        try:
+            _save_re = self.expected_regex
+            self.expected_regex = None
+            if not super().__exit__(exc_type, exc_value, tb):
+                return False
+        finally:
+            self.expected_regex = _save_re
+
+        exc_value = re.sub(r'(?s)\s+', ' ', str(exc_value))
+        if not _save_re.search(exc_value):
+            self._raiseFailure(
+                '"{}" does not match "{}"'.format(_save_re.pattern, exc_value)
+            )
+        return True
 
 
 class TestCase(_unittest.TestCase):
@@ -490,49 +560,50 @@ class TestCase(_unittest.TestCase):
 
     This class derives from unittest.TestCase and provides the following
     additional functionality:
-      - extended suport for test categories
-      - additional assertions:
-        * :py:meth:`assertStructuredAlmostEqual`
 
-    unittest.TestCase documentation
-    -------------------------------
+    * additional assertions:
+       - :py:meth:`~TestCase.assertStructuredAlmostEqual`
+       - :py:meth:`assertExpressionsEqual`
+       - :py:meth:`assertExpressionsStructurallyEqual`
+
+    * updated assertions:
+       - :py:meth:`assertRaisesRegex`
+
+    :py:class:`unittest.TestCase` documentation
+    -------------------------------------------
     """
-    __doc__ += _unittest.TestCase.__doc__
-    smoke = 1
-    nightly = 1
-    expensive = 0
-    fragile = 0
-    pyomo_unittest = 1
-    _default_categories = True
-    unspecified_categories = {
-        'smoke':0, 'nightly':0, 'expensive':0, 'fragile':0 }
 
-
-    @staticmethod
-    def parse_categories(category_string):
-        return tuple(
-            tuple(_category_to_tuple(_cat) for _cat in _set.split(','))
-            for _set in category_string.split()
+    # Note that the current unittest.TestCase documentation generates
+    # sphinx warnings.  We will clean up that documentation to suppress
+    # the warnings.
+    __doc__ += (
+        re.sub(
+            r'^( +)(\* +[^:]+:) *',
+            r'\n\1\2\n\1    ',
+            _unittest.TestCase.__doc__.rstrip(),
+            flags=re.M,
         )
+        + "\n\n"
+    )
 
-    @staticmethod
-    def categories_to_string(categories):
-        return ' '.join(','.join("%s=%s" % y for y in x) for x in categories)
+    # By default, we always want to spend the time to create the full
+    # diff of the test result and the baseline
+    maxDiff = None
 
-    def shortDescription(self):
-        # Disable nose's use of test docstrings for the test description.
-        return None
-
-    def currentTestPassed(self):
-        # Note: this only works for Python 3.4+
-        return not (self._outcome and any(
-            test is self and err for test, err in self._outcome.errors))
-
-    def assertStructuredAlmostEqual(self, first, second,
-                                    places=None, msg=None, delta=None,
-                                    reltol=None, abstol=None,
-                                    allow_second_superset=False,
-                                    item_callback=_floatOrCall):
+    def assertStructuredAlmostEqual(
+        self,
+        first,
+        second,
+        places=None,
+        msg=None,
+        delta=None,
+        reltol=None,
+        abstol=None,
+        allow_second_superset=False,
+        item_callback=_floatOrCall,
+    ):
+        # Note: __doc__ copied from assertStructuredAlmostEqual below
+        #
         assertStructuredAlmostEqual(
             first=first,
             second=second,
@@ -547,164 +618,499 @@ class TestCase(_unittest.TestCase):
             formatter=self._formatMessage,
         )
 
-def buildParser():
-    parser = argparse.ArgumentParser(usage='python -m pyomo.common.unittest [TARGETS] [OPTIONS]')
+    def assertRaisesRegex(self, expected_exception, expected_regex, *args, **kwargs):
+        """Asserts that the message in a raised exception matches a regex.
 
-    parser.add_argument(
-        'targets',
-        action='store',
-        nargs='*',
-        default=['pyomo'],
-        help='Packages to test')
-    parser.add_argument(
-        '-v',
-        '--verbose',
-        action='store_true',
-        dest='verbose',
-        help='Verbose output')
-    parser.add_argument(
-        '--cat',
-        '--category',
-        action='append',
-        dest='cat',
-        default=[],
-        help='Specify the test category. \
-            Can be used several times for multiple categories (e.g., \
-            --cat=nightly --cat=smoke).')
-    parser.add_argument('--xunit',
-        action='store_true',
-        dest='xunit',
-        help='Enable the nose XUnit plugin')
-    parser.add_argument('-x',
-        '--stop',
-        action='store_true',
-        dest='stop',
-        help='Stop running tests after the first error or failure.')
-    parser.add_argument('--dry-run',
-        action='store_true',
-        dest='dryrun',
-        help='Dry run: collect but do not execute the tests')
-    parser.add_argument('--show-log',
-        action='store_true',
-        dest='showlog',
-        help='Turn off log capture and allow warnings/deprecations to show.')
-    return parser
+        This is a light weight wrapper around
+        :py:meth:`unittest.TestCase.assertRaisesRegex` that adds
+        handling of a `normalize_whitespace` keyword argument that
+        normalizes all consecutive whitespace in the exception message
+        to a single space before checking the regular expression.
 
-def build_cmd(options, unknown, env):
-    from pyomo.common.fileutils import Executable
+        Parameters
+        ----------
+        expected_exception : Exception
+            Exception class expected to be raised.
 
-    if sys.platform.startswith('win'):
-        binDir = os.path.join(sys.exec_prefix, 'Scripts')
-        nosetests = os.path.join(binDir, 'nosetests.exe')
-    else:
-        binDir = os.path.join(sys.exec_prefix, 'bin')
-        nosetests = os.path.join(binDir, 'nosetests')
+        expected_regex : `re.Pattern` or str
+            Regular expression expected to be found in error message.
 
-    if os.path.exists(nosetests):
-        cmd = [nosetests]
-    else:
-        nose = Executable('nosetests')
-        cmd = [sys.executable, nose.path()]
+        *args :
+            Function to be called and extra positional args.
 
-    if (sys.platform.startswith('win') and sys.version_info[0:2] >= (3, 8)):
-        #######################################################
-        # This option is required due to a (likely) bug within nosetests.
-        # Nose is no longer maintained, but this workaround is based on a public forum suggestion:
-        #   https://stackoverflow.com/questions/58556183/nose-unittest-discovery-broken-on-python-3-8
-        #######################################################
-        cmd.append('--traverse-namespace')
+        **kwargs :
+            Extra keyword args.
 
-    if binDir not in env['PATH']:
-        env['PATH'] = os.pathsep.join([binDir, env.get('PATH','')])
+        msg : str
+            Optional message used in case of failure. Can only be used
+            when assertRaisesRegex is used as a context manager.
 
-    if options.verbose:
-        cmd.append('-v')
-    if options.stop:
-        cmd.append('-x')
-    if options.dryrun:
-        cmd.append('--collect-only')
-    if options.xunit:
-        cmd.append('--with-xunit')
-        cmd.append('--xunit-file=TEST-pyomo.xml')
-    if options.showlog:
-        cmd.append('--nologcapture')
-        cmd.append('--nocapture')
-    if unknown:
-        cmd.extend(unknown)
+        normalize_whitespace : bool, default=False
+            If True, collapses consecutive whitespace (including
+            newlines) into a single space before checking against the
+            regular expression
 
-    attr = []
-    _with_performance = False
-    _categories = []
-    for x in options.cat:
-        _categories.extend( TestCase.parse_categories(x) )
+        """
+        normalize_whitespace = kwargs.pop('normalize_whitespace', False)
+        if normalize_whitespace:
+            contextClass = _AssertRaisesContext_NormalizeWhitespace
+        else:
+            contextClass = _unittest.case._AssertRaisesContext
+        context = contextClass(expected_exception, self, expected_regex)
+        return context.handle('assertRaisesRegex', args, kwargs)
 
-    # If no one specified a category, default to "smoke" (and anything
-    # not built on pyomo.common.unittest.TestCase)
-    if not _categories:
-        _categories = [ (('smoke',1),), (('pyomo_unittest',0),) ]
-    # process each category set (that is, each conjunction of categories)
-    for _category_set in _categories:
-        _attrs = []
-        # "ALL" deletes the categories, and just runs everything.  Note
-        # that "ALL" disables performance testing
-        if ('all', 1) in _category_set:
-            _categories = []
-            _with_performance = False
-            attr = []
-            break
-        # For each category set, unless the user explicitly says
-        # something about fragile, assume that fragile should be
-        # EXCLUDED.
-        if ('fragile',1) not in _category_set \
-           and ('fragile',0) not in _category_set:
-            _category_set = _category_set + (('fragile',0),)
-        # Process each category in the conjection and add to the nose
-        # "attrib" plugin arguments
-        for _category, _value in _category_set:
-            if not _category:
+    def assertExpressionsEqual(self, a, b, include_named_exprs=True, places=None):
+        """Assert that two Pyomo expressions are equal.
+
+        This converts the expressions `a` and `b` into prefix notation
+        and then compares the resulting lists.  All nodes in the tree
+        are compared using py:meth:`assertEqual` (or
+        py:meth:`assertAlmostEqual`)
+
+        Parameters
+        ----------
+        a: ExpressionBase or native type
+
+        b: ExpressionBase or native type
+
+        include_named_exprs : bool
+            If True (the default), the comparison expands all named
+            expressions when generating the prefix notation
+
+        places : float
+            Number of decimal places required for equality of floating
+            point numbers in the expression. If None (the default), the
+            expressions must be exactly equal.
+
+        """
+        from pyomo.core.expr.compare import assertExpressionsEqual
+
+        return assertExpressionsEqual(self, a, b, include_named_exprs, places)
+
+    def assertExpressionsStructurallyEqual(
+        self, a, b, include_named_exprs=True, places=None
+    ):
+        """Assert that two Pyomo expressions are structurally equal.
+
+        This converts the expressions `a` and `b` into prefix notation
+        and then compares the resulting lists.  Operators and
+        (non-native type) leaf nodes in the prefix representation are
+        converted to strings before comparing (so that things like
+        variables can be compared across clones or pickles)
+
+        Parameters
+        ----------
+        a: ExpressionBase or native type
+
+        b: ExpressionBase or native type
+
+        include_named_exprs: bool
+            If True (the default), the comparison expands all named
+            expressions when generating the prefix notation
+
+        places: float
+            Number of decimal places required for equality of floating
+            point numbers in the expression. If None (the default), the
+            expressions must be exactly equal.
+
+        """
+        from pyomo.core.expr.compare import assertExpressionsStructurallyEqual
+
+        return assertExpressionsStructurallyEqual(
+            self, a, b, include_named_exprs, places
+        )
+
+
+TestCase.assertStructuredAlmostEqual.__doc__ = re.sub(
+    'exception :.*', '', assertStructuredAlmostEqual.__doc__, flags=re.S
+)
+
+
+class BaselineTestDriver:
+    """Generic driver for performing baseline tests in bulk
+
+    This test driver was originally crafted for testing the examples in
+    the Pyomo Book, and has since been generalized to reuse in testing
+    ".. literalinclude:" examples from the Online Docs.
+
+    We expect that consumers of this class will derive from both this
+    class and `pyomo.common.unittest.TestCase`, and then use
+    `parameterized` to declare tests that call either the
+    :py:meth:`python_test_driver` or :py:meth:`shell_test_driver`
+    methods.
+
+    Note that derived classes must declare two class attributes:
+
+    Class Attributes
+    ----------------
+    solver_dependencies: Dict[str, List[str]]
+
+        maps the test name to a list of required solvers.  If any solver
+        is not available, then the test will be skipped.
+
+    package_dependencies: Dict[str, List[str]]
+
+        maps the test name to a list of required modules.  If any module
+        is not available, then the test will be skipped.
+
+    """
+
+    @staticmethod
+    def custom_name_func(test_func, test_num, test_params):
+        func_name = test_func.__name__
+        return "test_%s_%s" % (test_params.args[0], func_name[-2:])
+
+    def __init__(self, test):
+        # Finalize the class, if necessary...
+        if getattr(self.__class__, 'solver_available', None) is None:
+            self.initialize_dependencies()
+        super().__init__(test)
+
+    def initialize_dependencies(self):
+        # Note: as a rule, pyomo.common is not allowed to import from
+        # the rest of Pyomo.  we permit it here because a) this is not
+        # at module scope, and b) there is really no better / more
+        # logical place in pyomo to put this code.
+        from pyomo.opt import check_available_solvers
+
+        cls = self.__class__
+        #
+        # Initialize the availability data
+        #
+        solvers_used = set(sum(list(cls.solver_dependencies.values()), []))
+        available_solvers = check_available_solvers(*solvers_used)
+        cls.solver_available = {
+            solver_: (solver_ in available_solvers) for solver_ in solvers_used
+        }
+
+        cls.package_available = {}
+        cls.package_modules = {}
+        packages_used = set(sum(list(cls.package_dependencies.values()), []))
+        for package_ in packages_used:
+            pack, pack_avail = attempt_import(package_, defer_import=False)
+            cls.package_available[package_] = pack_avail
+            cls.package_modules[package_] = pack
+
+    @classmethod
+    def _find_tests(cls, test_dirs, pattern):
+        test_tuples = []
+        for testdir in test_dirs:
+            # Find all pattern files in the test directory and any immediate
+            # sub-directories
+            for fname in list(glob.glob(os.path.join(testdir, pattern))) + list(
+                glob.glob(os.path.join(testdir, '*', pattern))
+            ):
+                test_file = os.path.abspath(fname)
+                bname = os.path.basename(test_file)
+                dir_ = os.path.dirname(test_file)
+                name = os.path.splitext(bname)[0]
+                tname = os.path.basename(dir_) + '_' + name
+
+                suffix = None
+                # Look for txt and yml file names matching py file names. Add
+                # a test for any found
+                for suffix_ in ['.txt', '.yml']:
+                    if os.path.exists(os.path.join(dir_, name + suffix_)):
+                        suffix = suffix_
+                        break
+                if suffix is not None:
+                    tname = tname.replace('-', '_')
+                    tname = tname.replace('.', '_')
+
+                    # Create list of tuples with (test_name, test_file, baseline_file)
+                    test_tuples.append(
+                        (tname, test_file, os.path.join(dir_, name + suffix))
+                    )
+
+        # Ensure a deterministic test ordering
+        test_tuples.sort()
+        return test_tuples
+
+    @classmethod
+    def gather_tests(cls, test_dirs):
+        # Find all .sh files in the test directories
+        sh_test_tuples = cls._find_tests(test_dirs, '*.sh')
+
+        # Find all .py files in the test directories
+        py_test_tuples = cls._find_tests(test_dirs, '*.py')
+
+        # If there is both a .py and a .sh, defer to the sh
+        sh_files = set(map(operator.itemgetter(1), sh_test_tuples))
+        py_test_tuples = list(
+            filter(lambda t: t[1][:-3] + '.sh' not in sh_files, py_test_tuples)
+        )
+
+        return py_test_tuples, sh_test_tuples
+
+    def check_skip(self, name):
+        """
+        Return a boolean if the test should be skipped
+        """
+
+        if name in self.solver_dependencies:
+            solvers_ = self.solver_dependencies[name]
+            if not all([self.solver_available[i] for i in solvers_]):
+                # Skip the test because a solver is not available
+                _missing = []
+                for i in solvers_:
+                    if not self.solver_available[i]:
+                        _missing.append(i)
+                return "Solver%s %s %s not available" % (
+                    's' if len(_missing) > 1 else '',
+                    ", ".join(_missing),
+                    'are' if len(_missing) > 1 else 'is',
+                )
+
+        if name in self.package_dependencies:
+            packages_ = self.package_dependencies[name]
+            if not all([self.package_available[i] for i in packages_]):
+                # Skip the test because a package is not available
+                _missing = []
+                for i in packages_:
+                    if not self.package_available[i]:
+                        _missing.append(i)
+                return "Package%s %s %s not available" % (
+                    's' if len(_missing) > 1 else '',
+                    ", ".join(_missing),
+                    'are' if len(_missing) > 1 else 'is',
+                )
+
+            # This is a hack, xlrd dropped support for .xlsx files in 2.0.1 which
+            # causes problems with older versions of Pandas<=1.1.5 so skipping
+            # tests requiring both these packages when incompatible versions are found
+            if (
+                'pandas' in self.package_dependencies[name]
+                and 'xlrd' in self.package_dependencies[name]
+            ):
+                if check_min_version(
+                    self.package_modules['xlrd'], '2.0.1'
+                ) and not check_min_version(self.package_modules['pandas'], '1.1.6'):
+                    return "Incompatible versions of xlrd and pandas"
+
+        return False
+
+    def filter_fcn(self, line):
+        """
+        Ignore certain text when comparing output with baseline
+        """
+        for field in (
+            '[',
+            'password:',
+            'http:',
+            'Job ',
+            'Importing module',
+            'Function',
+            'File',
+            'Matplotlib',
+            'Memory:',
+            '-------',
+            '=======',
+            '    ^',
+        ):
+            if line.startswith(field):
+                return True
+        for field in (
+            'Total CPU',
+            'Ipopt',
+            'license',
+            #'Status: optimal',
+            #'Status: feasible',
+            'time:',
+            'Time:',
+            'with format cpxlp',
+            'usermodel = <module',
+            'execution time=',
+            'Solver results file:',
+            'TokenServer',
+            # next 6 patterns ignore entries in pstats reports:
+            'function calls',
+            'List reduced',
+            '.py:',  # timing/profiling output
+            ' {built-in method',
+            ' {method',
+            ' {pyomo.core.expr.numvalue.as_numeric}',
+            ' {gurobipy.',
+        ):
+            if field in line:
+                return True
+        return False
+
+    def filter_file_contents(self, lines, abstol=None):
+        _numpy_scalar_re = re.compile(r'np.(int|float)\d+\(([^\)]+)\)')
+        filtered = []
+        deprecated = None
+        for line in lines:
+            # Ignore all deprecation warnings
+            if line.startswith('WARNING: DEPRECATED:'):
+                deprecated = ''
+            if deprecated is not None:
+                deprecated += line
+                if re.search(r'\(called\s+from[^)]+\)', deprecated):
+                    deprecated = None
                 continue
-            if _value:
-                _attrs.append(_category)
+
+            if not line or self.filter_fcn(line):
+                continue
+
+            # Strip off beginning of lines giving time in seconds
+            # Needed for the performance chapter tests
+            if "seconds" in line:
+                s = line.find("seconds") + 7
+                line = line[s:]
+
+            item_list = []
+            items = line.strip().split()
+            for i in items:
+                # Split up lists, dicts, and sets
+                while i and i[0] in '[{':
+                    item_list.append(i[0])
+                    i = i[1:]
+                tail = []
+                while i and i[-1] in ',:]}':
+                    tail.append(i[-1])
+                    i = i[:-1]
+
+                # A few substitutions to get tests passing on pypy3
+                if ".inf" in i:
+                    i = i.replace(".inf", "inf")
+                if "null" in i:
+                    i = i.replace("null", "None")
+
+                try:
+                    # Numpy 2.x changed the repr for scalars.  Convert
+                    # the new scalar reprs back to the original (which
+                    # were indistinguishable from python floats/ints)
+                    np_match = _numpy_scalar_re.match(i)
+                    if np_match:
+                        item_list.append(float(np_match.group(2)))
+                    else:
+                        item_list.append(float(i))
+                except:
+                    item_list.append(i)
+                if tail:
+                    tail.reverse()
+                    item_list.extend(tail)
+
+            # We can get printed results objects where the baseline is
+            # exactly 0 (and omitted) and the test is slightly non-zero.
+            # We will look for the pattern of values printed from
+            # results objects and remote them if they are within
+            # tolerance of 0
+            if (
+                len(item_list) == 3
+                and item_list[0] == 'Value'
+                and item_list[1] == ':'
+                and type(item_list[2]) is float
+                and abs(item_list[2]) < (abstol or 0)
+                and len(filtered[-1]) == 2
+                and filtered[-1][1] == ':'
+            ):
+                filtered.pop()
             else:
-                _attrs.append("(not %s)" % (_category,))
-            if _category == 'performance' and _value == 1:
-                _with_performance = True
-        if _attrs:
-            attr.append("--eval-attr=%s" % (' and '.join(_attrs),))
-    cmd.extend(attr)
-    if attr:
-        print(" ... for test categor%s: %s" %
-              ('y' if len(attr)<=2 else 'ies',
-               ' '.join(attr[1::2])))
+                filtered.append(item_list)
 
-    if _with_performance:
-        cmd.append('--with-testdata')
-        env['NOSE_WITH_TESTDATA'] = '1'
-        env['NOSE_WITH_FORCED_GC'] = '1'
+        return filtered
 
-    cmd.extend(options.targets)
+    def compare_baseline(self, test_output, baseline, abstol=1e-6, reltol=1e-8):
+        # Filter files independently and then compare filtered contents
+        out_filtered = self.filter_file_contents(
+            test_output.strip().split('\n'), abstol
+        )
+        base_filtered = self.filter_file_contents(baseline.strip().split('\n'), abstol)
 
-    return cmd
+        try:
+            self.assertStructuredAlmostEqual(
+                out_filtered,
+                base_filtered,
+                abstol=abstol,
+                reltol=reltol,
+                allow_second_superset=False,
+            )
+            return True
+        except self.failureException:
+            # Print helpful information when file comparison fails
+            print('---------------------------------')
+            print('BASELINE FILE')
+            print('---------------------------------')
+            print(baseline)
+            print('=================================')
+            print('---------------------------------')
+            print('TEST OUTPUT FILE')
+            print('---------------------------------')
+            print(test_output)
+            raise
 
-def runtests(parser):
+    def python_test_driver(self, tname, test_file, base_file):
+        bname = os.path.basename(test_file)
+        _dir = os.path.dirname(test_file)
 
-    from pyomo.common.fileutils import PYOMO_ROOT_DIR as basedir
-    env = os.environ.copy()
-    os.chdir(basedir)
+        skip_msg = self.check_skip('test_' + tname)
+        if skip_msg:
+            raise _unittest.SkipTest(skip_msg)
 
-    options, unknown = parser.parse_known_args()
+        with open(base_file, 'r') as FILE:
+            baseline = FILE.read()
 
-    print("Running tests in directory %s" % (basedir,))
-    cmd = build_cmd(options, unknown, env)
-    print(cmd)
-    print("Running...\n    %s\n" % (
-            ' '.join( (x if ' ' not in x else '"'+x+'"') for x in cmd ), ))
-    sys.stdout.flush()
-    result = subprocess.run(cmd, env=env)
-    rc = result.returncode
-    return rc
+        cwd = os.getcwd()
+        try:
+            os.chdir(_dir)
+            # This is roughly equivalent to:
+            #    subprocess.run([sys.executable, bname],
+            #                   stdout=f, stderr=f, cwd=_dir)
+            with capture_output(None, True) as OUT:
+                # Note: we want LoggingIntercept to log to the
+                # *current* stdout (which is the TeeStream from
+                # capture_output).  This ensures that log messages and
+                # normal output appear in the correct order.
+                with LoggingIntercept(sys.stdout, formatter=pyomo_formatter):
+                    import_file(bname, infer_package=False, module_name='__main__')
+        finally:
+            os.chdir(cwd)
 
+        try:
+            self.compare_baseline(OUT.getvalue(), baseline)
+        except:
+            if os.environ.get('PYOMO_TEST_UPDATE_BASELINES', None):
+                with open(base_file, 'w') as FILE:
+                    FILE.write(OUT.getvalue())
+            raise
 
-if __name__ == '__main__':
-    parser = buildParser()
-    sys.exit(runtests(parser))
+    def shell_test_driver(self, tname, test_file, base_file):
+        bname = os.path.basename(test_file)
+        _dir = os.path.dirname(test_file)
+
+        skip_msg = self.check_skip('test_' + tname)
+        if skip_msg:
+            raise _unittest.SkipTest(skip_msg)
+
+        # Skip all shell tests on Windows.
+        if os.name == 'nt':
+            raise _unittest.SkipTest("Shell tests are not runnable on Windows")
+
+        with open(base_file, 'r') as FILE:
+            baseline = FILE.read()
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(_dir)
+            _env = os.environ.copy()
+            _env['PATH'] = os.pathsep.join(
+                [os.path.dirname(sys.executable), _env['PATH']]
+            )
+            rc = subprocess.run(
+                ['bash', bname],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=_dir,
+                env=_env,
+            )
+        finally:
+            os.chdir(cwd)
+
+        try:
+            self.compare_baseline(rc.stdout.decode(), baseline)
+        except:
+            if os.environ.get('PYOMO_TEST_UPDATE_BASELINES', None):
+                with open(base_file, 'w') as FILE:
+                    FILE.write(rc.stdout.decode())
+            raise

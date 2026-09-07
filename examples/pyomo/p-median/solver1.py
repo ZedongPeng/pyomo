@@ -1,22 +1,21 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 # Imports from Pyomo
-from pyomo.core import *
-from pyomo.common.plugin import *
-from pyomo.opt import *
+import copy
+import pyomo.environ as pyo
+from pyomo.common.plugin_base import alias, implements
+from pyomo.opt import SolverStatus, SolutionStatus, ProblemSense
 
 
-@plugin_factory(SolverFactory)
-class MySolver(object):
-
+@plugin_factory(pyo.SolverFactory)
+class MySolver:
     alias('greedy')
 
     # Declare that this is an IOptSolver plugin
@@ -27,9 +26,9 @@ class MySolver(object):
     def solve(self, instance, **kwds):
         print("Starting greedy heuristic")
         val, instance = self._greedy(instance)
-        n = value(instance.N)
+        n = pyo.value(instance.N)
         # Setup results
-        results = SolverResults()
+        results = pyo.SolverResults()
         results.problem.name = instance.name
         results.problem.sense = ProblemSense.minimize
         results.problem.num_constraints = 1
@@ -39,43 +38,43 @@ class MySolver(object):
         soln = results.solution.add()
         soln.value = val
         soln.status = SolutionStatus.feasible
-        for j in sequence(n):
+        for j in pyo.sequence(n):
             if instance.y[j].value is 1:
-                soln.variable[instance.y[j].name] = {"Value" : 1, "Id" : j}
+                soln.variable[instance.y[j].name] = {"Value": 1, "Id": j}
         return results
 
     # Perform a greedy search
     def _greedy(self, instance):
-        p = value(instance.P)
-        n = value(instance.N)
-        m = value(instance.M)
-        fixed=set()
+        p = pyo.value(instance.P)
+        n = pyo.value(instance.N)
+        m = pyo.value(instance.M)
+        fixed = set()
         # Initialize
-        for j in sequence(n):
-            instance.y[j].value=0
+        for j in pyo.sequence(n):
+            instance.y[j].value = 0
         # Greedily fix the next best facility
-        for i in sequence(p):
+        for i in pyo.sequence(p):
             best = None
-            ndx=j
-            for j in sequence(n):
+            ndx = j
+            for j in pyo.sequence(n):
                 if j in fixed:
                     continue
-                instance.y[j].value=1
+                instance.y[j].value = 1
                 # Compute value
                 val = 0.0
-                for kk in sequence(m):
-                    tmp=copy.copy(fixed)
+                for kk in pyo.sequence(m):
+                    tmp = copy.copy(fixed)
                     tmp.add(j)
                     tbest = None
                     for jj in tmp:
-                        if tbest is None or instance.d[jj,kk].value < tbest:
-                            tbest = instance.d[jj,kk].value
+                        if tbest is None or instance.d[jj, kk].value < tbest:
+                            tbest = instance.d[jj, kk].value
                     val += tbest
                 # Keep best greedy choice
                 if best is None or val < best:
-                    best=val
-                    ndx=j
-                instance.y[j].value=0
+                    best = val
+                    ndx = j
+                instance.y[j].value = 0
             fixed.add(ndx)
-            instance.y[ndx].value=1
+            instance.y[ndx].value = 1
         return [best, instance]

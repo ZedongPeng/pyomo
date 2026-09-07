@@ -1,7 +1,19 @@
+# -*- coding: utf-8 -*-
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 import sys
 import logging
 
-from pyomo.core.expr.numvalue import native_types, native_logical_types
+from pyomo.common.deprecation import deprecated
+from pyomo.common.modeling import NOTSET
+from pyomo.common.numeric_types import native_types, native_logical_types
+from pyomo.core.expr.expr_common import _type_check_exception_arg
 from pyomo.core.expr.expr_common import _and, _or, _equiv, _inv, _xor, _impl
 from pyomo.core.pyomoobject import PyomoObject
 
@@ -10,21 +22,26 @@ native_logical_values = {True, False, 1, 0}
 
 
 def _generate_logical_proposition(etype, _self, _other):
-    raise RuntimeError("Incomplete import of Pyomo expression system")  #pragma: no cover
+    raise RuntimeError(
+        "Incomplete import of Pyomo expression system"
+    )  # pragma: no cover
 
 
 def as_boolean(obj):
-    """
-    A function that creates a BooleanConstant object that
-    wraps Python Boolean values.
+    """A function that converts its argument to a Pyomo Boolean (logical) object.
 
-    Args:
-        obj: The logical value that may be wrapped.
+    If `obj` is a Pyomo logical value (usually a BooleanValue subclass),
+    then `obj` is returned.  If `obj` is in `native_logical_types`, then
+    the value is wrapped in a :py:class:`BooleanConstant` and returned.
 
-    Raises: TypeError if the object is in native_types and not in 
-        native_logical_types
+    Parameters
+    ----------
+    obj: The value to process and return / convert.
 
-    Returns: A true or false BooleanConstant or the original object
+    Raises
+    ------
+    TypeError: if `obj` is not a logical value
+
     """
     if obj.__class__ in native_logical_types:
         return BooleanConstant(obj)
@@ -32,52 +49,32 @@ def as_boolean(obj):
     # Ignore objects that are duck types to work with Pyomo expressions
     #
     try:
-        obj.is_expression_type()
-        return obj
+        if obj.is_logical_type():
+            return obj
     except AttributeError:
         pass
     #
     # Generate errors
     #
     if obj.__class__ in native_types:
-        raise TypeError("Cannot treat the value '%s' as a logical constant" % str(obj))
+        raise TypeError(f"Cannot treat the value '{obj}' as a logical constant")
+    try:
+        _name = obj.name
+    except AttributeError:
+        _name = str(obj)
     raise TypeError(
-        "Cannot treat the value '%s' as a logical constant because it has unknown "
-        "type '%s'" % (str(obj), type(obj).__name__))
+        "The '%s' object '%s' is not a valid type for Pyomo "
+        "logical expressions" % (type(obj).__name__, _name)
+    )
 
 
 class BooleanValue(PyomoObject):
     """
     This is the base class for Boolean values used in Pyomo.
     """
+
     __slots__ = ()
     __hash__ = None
-
-    def __getstate__(self):
-        _base = super(BooleanValue, self)
-        if hasattr(_base, '__getstate__'):
-            return _base.__getstate__()
-        else:
-            return {}
-
-    def __setstate__(self, state):
-        """
-        Restore a pickled state into this instance
-        Our model for setstate is for derived classes to modify
-        the state dictionary as control passes up the inheritance
-        hierarchy (using super() calls).  All assignment of state ->
-        object attributes is handled at the last class before 'object',
-        which may -- or may not (thanks to MRO) -- be here.
-        """
-        _base = super(BooleanValue, self)
-        if hasattr(_base, '__setstate__'):
-            return _base.__setstate__(state)
-        else:
-            for key, val in state.items():
-                # Note: per the Python data model docs, we explicitly
-                # set the attribute using object.__setattr__() instead
-                # of setting self.__dict__[key] = val.
-                object.__setattr__(self, key, val)
 
     def getname(self, fully_qualified=False, name_buffer=None):
         """
@@ -106,6 +103,11 @@ class BooleanValue(PyomoObject):
         """Return True if this is a non-constant value that has been fixed"""
         return False
 
+    @deprecated(
+        "is_relational() is deprecated in favor of "
+        "is_expression_type(ExpressionType.RELATIONAL)",
+        version='6.4.3',
+    )
     def is_relational(self):
         """
         Return True if this Logical value represents a relational expression.
@@ -123,33 +125,108 @@ class BooleanValue(PyomoObject):
     def is_logical_type(self):
         return True
 
-    def equivalent_to(self, other):
-        """
-        Construct an EquivalenceExpression between this BooleanValue and its operand.
-        """
-        return _generate_logical_proposition(_equiv, self, other)
-
-    def land(self, other):
-        """
-        Construct an AndExpression (Logical And) between this BooleanValue and its operand.
-        """
-        return _generate_logical_proposition(_and, self, other)
-
-    def lor(self, other):
-        """
-        Construct an OrExpression (Logical OR) between this BooleanValue and its operand.
-        """
-        return _generate_logical_proposition(_or, self, other)
-
     def __invert__(self):
         """
         Construct a NotExpression using operator '~'
         """
         return _generate_logical_proposition(_inv, self, None)
 
+    def equivalent_to(self, other):
+        """
+        Construct an EquivalenceExpression between this BooleanValue and its operand.
+        """
+        ans = _generate_logical_proposition(_equiv, self, other)
+        if ans is NotImplemented:
+            raise TypeError(
+                "unsupported operand type for equivalent_to(): "
+                f"'{type(other).__name__}'"
+            )
+        return ans
+
+    def land(self, other):
+        """
+        Construct an AndExpression (Logical And) between this BooleanValue and `other`.
+        """
+        ans = _generate_logical_proposition(_and, self, other)
+        if ans is NotImplemented:
+            raise TypeError(
+                f"unsupported operand type for land(): '{type(other).__name__}'"
+            )
+        return ans
+
+    def __and__(self, other):
+        """
+        Construct an AndExpression using the '&' operator
+        """
+        return _generate_logical_proposition(_and, self, other)
+
+    def __rand__(self, other):
+        """
+        Construct an AndExpression using the '&' operator
+        """
+        return _generate_logical_proposition(_and, other, self)
+
+    def __iand__(self, other):
+        """
+        Construct an AndExpression using the '&' operator
+        """
+        return _generate_logical_proposition(_and, self, other)
+
+    def lor(self, other):
+        """
+        Construct an OrExpression (Logical OR) between this BooleanValue and `other`.
+        """
+        ans = _generate_logical_proposition(_or, self, other)
+        if ans is NotImplemented:
+            raise TypeError(
+                f"unsupported operand type for lor(): '{type(other).__name__}'"
+            )
+        return ans
+
+    def __or__(self, other):
+        """
+        Construct an OrExpression using the '|' operator
+        """
+        return _generate_logical_proposition(_or, self, other)
+
+    def __ror__(self, other):
+        """
+        Construct an OrExpression using the '|' operator
+        """
+        return _generate_logical_proposition(_or, other, self)
+
+    def __ior__(self, other):
+        """
+        Construct an OrExpression using the '|' operator
+        """
+        return _generate_logical_proposition(_or, self, other)
+
     def xor(self, other):
         """
-        Construct an EquivalenceExpression using method "xor"
+        Construct an XorExpression using method "xor"
+        """
+        ans = _generate_logical_proposition(_xor, self, other)
+        if ans is NotImplemented:
+            raise TypeError(
+                f"unsupported operand type for xor(): '{type(other).__name__}'"
+            )
+        return ans
+
+    def __xor__(self, other):
+        """
+        Construct an XorExpression using the '^' operator
+        """
+        return _generate_logical_proposition(_xor, self, other)
+
+    def __rxor__(self, other):
+        """
+        Construct an XorExpression using the '^' operator
+        """
+        return _generate_logical_proposition(_xor, other, self)
+
+    def __ixor__(self, other):
+        """
+        Construct an XorExpression using the '^' operator
         """
         return _generate_logical_proposition(_xor, self, other)
 
@@ -157,35 +234,39 @@ class BooleanValue(PyomoObject):
         """
         Construct an ImplicationExpression using method "implies"
         """
-        return _generate_logical_proposition(_impl, self, other)
+        ans = _generate_logical_proposition(_impl, self, other)
+        if ans is NotImplemented:
+            raise TypeError(
+                f"unsupported operand type for implies(): '{type(other).__name__}'"
+            )
+        return ans
 
-    def to_string(self, verbose=None, labeler=None, smap=None,
-                  compute_values=False):
+    def to_string(self, verbose=None, labeler=None, smap=None, compute_values=False):
         """
         Return a string representation of the expression tree.
 
         Args:
-            verbose (bool): If :const:`True`, then the the string 
+            verbose (bool): If :const:`True`, then the the string
                 representation consists of nested functions.  Otherwise,
                 the string representation is an algebraic equation.
                 Defaults to :const:`False`.
-            labeler: An object that generates string labels for 
+            labeler: An object that generates string labels for
                 variables in the expression tree.  Defaults to :const:`None`.
 
         Returns:
             A string representation for the expression tree.
         """
-        if compute_values and self.is_fixed():
+        if (compute_values and self.is_fixed()) or self.is_constant():
             try:
                 return str(self())
             except:
-                pass
-        if not self.is_constant():
-            if smap:
-                return smap.getSymbol(self, labeler)
-            elif labeler is not None:
-                return labeler(self)
-        return str(self)
+                pass  # return str(self)
+        if smap:
+            return smap.getSymbol(self, labeler)
+        elif labeler is not None:
+            return labeler(self)
+        else:
+            return str(self)
 
 
 class BooleanConstant(BooleanValue):
@@ -195,18 +276,32 @@ class BooleanConstant(BooleanValue):
         value           The initial value.
     """
 
-    __slots__ = ('value',)
+    __slots__ = ('value', '_name')
+    singleton = {}
 
-    def __init__(self, value):
-        if value not in native_logical_values:
-            raise TypeError('Not a valid BooleanValue. Unable to create a logical constant')
-        self.value = value
+    def __new__(cls, value, name=None):
+        if name is None:
+            name = value
+        if name not in cls.singleton:
+            if value not in native_logical_values:
+                raise TypeError(
+                    'Not a valid BooleanValue. Unable to create a logical constant'
+                )
+            cls.singleton[name] = super().__new__(cls)
+            cls.singleton[name].value = value
+            cls.singleton[name]._name = name
+        return cls.singleton[name]
 
-    def __getstate__(self):
-        state = super(BooleanConstant, self).__getstate__()
-        for i in BooleanConstant.__slots__:
-            state[i] = getattr(self, i)
-        return state
+    def __deepcopy__(self, memo):
+        # Prevent deepcopy from duplicating this object
+        return self
+
+    def __reduce__(self):
+        return self.__class__, (self._name, self._args_)
+
+    def __init__(self, value, name=None):
+        # note that the meat of __init__ is called as part of __new__ above.
+        assert self.value == value
 
     def is_constant(self):
         return True
@@ -218,7 +313,7 @@ class BooleanConstant(BooleanValue):
         return False
 
     def __str__(self):
-        return str(self.value)
+        return str(self._name)
 
     def __nonzero__(self):
         return self.value
@@ -226,11 +321,12 @@ class BooleanConstant(BooleanValue):
     def __bool__(self):
         return self.value
 
-    def __call__(self, exception=True):
+    def __call__(self, exception=NOTSET):
         """Return the constant value"""
+        exception = _type_check_exception_arg(self, exception)
         return self.value
 
     def pprint(self, ostream=None, verbose=False):
-        if ostream is None:         #pragma:nocover
+        if ostream is None:  # pragma:nocover
             ostream = sys.stdout
         ostream.write(str(self))

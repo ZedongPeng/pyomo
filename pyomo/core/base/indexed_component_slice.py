@@ -1,12 +1,11 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import copy
 import itertools
@@ -14,8 +13,11 @@ import itertools
 from pyomo.common import DeveloperError
 from pyomo.common.collections import Sequence
 
+from pyomo.core.base.enums import SortComponents
+from pyomo.core.base.global_set import UnindexedComponent_index
 
-class IndexedComponent_slice(object):
+
+class IndexedComponent_slice:
     """Special class for slicing through hierarchical component trees
 
     The basic concept is to interrupt the normal slice generation
@@ -27,6 +29,7 @@ class IndexedComponent_slice(object):
     calls to __getitem__ / __getattr__ / __call__ happen *before* the
     call to __iter__()
     """
+
     ATTR_MASK = 8
     ITEM_MASK = 16
     CALL_MASK = 32
@@ -94,17 +97,29 @@ class IndexedComponent_slice(object):
             if fixed is not None:
                 self._call_stack.append(fixed)
                 self._len += 1
-            set_attr('call_errors_generate_exceptions',
-                     component.call_errors_generate_exceptions)
-            set_attr('key_errors_generate_exceptions',
-                     component.key_errors_generate_exceptions)
-            set_attr('attribute_errors_generate_exceptions',
-                     component.attribute_errors_generate_exceptions)
+            set_attr(
+                'call_errors_generate_exceptions',
+                component.call_errors_generate_exceptions,
+            )
+            set_attr(
+                'key_errors_generate_exceptions',
+                component.key_errors_generate_exceptions,
+            )
+            set_attr(
+                'attribute_errors_generate_exceptions',
+                component.attribute_errors_generate_exceptions,
+            )
         else:
             # Normal constructor
-            set_attr('_call_stack', [
-                (IndexedComponent_slice.slice_info,
-                 (component, fixed, sliced, ellipsis)) ])
+            set_attr(
+                '_call_stack',
+                [
+                    (
+                        IndexedComponent_slice.slice_info,
+                        (component, fixed, sliced, ellipsis),
+                    )
+                ],
+            )
             set_attr('_len', 1)
             # Since this is an object, users may change these flags
             # between where they declare the slice and iterate over it.
@@ -120,13 +135,13 @@ class IndexedComponent_slice(object):
         "blanket" implementation of :py:meth:`__getattr__`, we need to
         explicitly implement these to avoid "accidentally" extending or
         evaluating this slice."""
-        return {k:getattr(self,k) for k in self.__dict__}
+        return {k: getattr(self, k) for k in self.__dict__}
 
     def __setstate__(self, state):
-        """Deserialize the state into this object. """
+        """Deserialize the state into this object."""
         set_attr = super(IndexedComponent_slice, self).__setattr__
-        for k,v in state.items():
-            set_attr(k,v)
+        for k, v in state.items():
+            set_attr(k, v)
 
     def __deepcopy__(self, memo):
         """Deepcopy this object (leveraging :py:meth:`__getstate__`)"""
@@ -145,8 +160,9 @@ class IndexedComponent_slice(object):
         IndexedComponent_slice object.  Subsequent attempts to resolve
         attributes hit this method.
         """
-        return IndexedComponent_slice(self, (
-            IndexedComponent_slice.get_attribute, name ) )
+        return IndexedComponent_slice(
+            self, (IndexedComponent_slice.get_attribute, name)
+        )
 
     def __setattr__(self, name, value):
         """Override the "." operator implementing attribute assignment
@@ -159,11 +175,12 @@ class IndexedComponent_slice(object):
         """
         # Don't overload any pre-existing attributes
         if name in self.__dict__:
-            return super(IndexedComponent_slice, self).__setattr__(name,value)
+            return super(IndexedComponent_slice, self).__setattr__(name, value)
 
         # Immediately evaluate the slice and set the attributes
-        for i in IndexedComponent_slice(self, (
-                IndexedComponent_slice.set_attribute, name, value ) ):
+        for i in IndexedComponent_slice(
+            self, (IndexedComponent_slice.set_attribute, name, value)
+        ):
             pass
         return None
 
@@ -174,8 +191,7 @@ class IndexedComponent_slice(object):
         IndexedComponent_slice object.  Subsequent attempts to query
         items hit this method.
         """
-        return IndexedComponent_slice(self, (
-            IndexedComponent_slice.get_item, idx ) )
+        return IndexedComponent_slice(self, (IndexedComponent_slice.get_item, idx))
 
     def __setitem__(self, idx, val):
         """Override the "[]" operator for setting item values.
@@ -187,8 +203,9 @@ class IndexedComponent_slice(object):
         and immediately evaluates the slice.
         """
         # Immediately evaluate the slice and set the attributes
-        for i in IndexedComponent_slice(self, (
-                IndexedComponent_slice.set_item, idx, val ) ):
+        for i in IndexedComponent_slice(
+            self, (IndexedComponent_slice.set_item, idx, val)
+        ):
             pass
         return None
 
@@ -202,8 +219,7 @@ class IndexedComponent_slice(object):
         and immediately evaluates the slice.
         """
         # Immediately evaluate the slice and set the attributes
-        for i in IndexedComponent_slice(self, (
-                IndexedComponent_slice.del_item, idx ) ):
+        for i in IndexedComponent_slice(self, (IndexedComponent_slice.del_item, idx)):
             pass
         return None
 
@@ -228,12 +244,13 @@ class IndexedComponent_slice(object):
         # don't know why that happens, but we will trap it here and
         # remove the getattr(__name__) from the call stack.
         _len = self._len
-        if self._call_stack[_len-1][0] == IndexedComponent_slice.get_attribute \
-           and self._call_stack[_len-1][1] == '__name__':
+        if (
+            self._call_stack[_len - 1][0] == IndexedComponent_slice.get_attribute
+            and self._call_stack[_len - 1][1] == '__name__'
+        ):
             self._len -= 1
 
-        ans = IndexedComponent_slice(self, (
-            IndexedComponent_slice.call, args, kwds ) )
+        ans = IndexedComponent_slice(self, (IndexedComponent_slice.call, args, kwds))
         # Because we just duplicated the slice and added a new entry, we
         # know that the _len == len(_call_stack)
         if ans._call_stack[-2][1] == 'component':
@@ -241,7 +258,7 @@ class IndexedComponent_slice(object):
         else:
             # Note: simply calling "list(self)" results in infinite
             # recursion in python2.6
-            return list( i for i in ans )
+            return list(i for i in ans)
 
     @classmethod
     def _getitem_args_to_str(cls, args):
@@ -250,9 +267,11 @@ class IndexedComponent_slice(object):
                 args[i] = '...'
             elif type(v) is slice:
                 args[i] = (
-                    (repr(v.start) if v.start is not None else '') + ':' +
-                    (repr(v.stop) if v.stop is not None else '') +
-                    (':%r' % v.step if v.step is not None else ''))
+                    (repr(v.start) if v.start is not None else '')
+                    + ':'
+                    + (repr(v.stop) if v.stop is not None else '')
+                    + (':%r' % v.step if v.step is not None else '')
+                )
             else:
                 args[i] = repr(v)
         return '[' + ', '.join(args) + ']'
@@ -262,11 +281,12 @@ class IndexedComponent_slice(object):
         for level in self._call_stack:
             if level[0] == IndexedComponent_slice.slice_info:
                 ans += level[1][0].name
-                tmp = dict(level[1][1])
-                tmp.update(level[1][2])
-                if level[1][3] is not None:
-                    tmp[level[1][3]] = Ellipsis
-                ans += self._getitem_args_to_str([tmp[i] for i in sorted(tmp)])
+                if level[1][1] is not None:
+                    tmp = dict(level[1][1])
+                    tmp.update(level[1][2])
+                    if level[1][3] is not None:
+                        tmp[level[1][3]] = Ellipsis
+                    ans += self._getitem_args_to_str([tmp[i] for i in sorted(tmp)])
             elif level[0] & IndexedComponent_slice.ITEM_MASK:
                 if isinstance(level[1], Sequence):
                     tmp = list(level[1])
@@ -277,11 +297,14 @@ class IndexedComponent_slice(object):
                 ans += '.' + level[1]
             elif level[0] & IndexedComponent_slice.CALL_MASK:
                 ans += (
-                    '(' + ', '.join(
+                    '('
+                    + ', '.join(
                         itertools.chain(
                             (repr(_) for _ in level[1]),
-                            ('%s=%r' % kv for kv in level[2].items()))
-                    ) + ')'
+                            ('%s=%r' % kv for kv in level[2].items()),
+                        )
+                    )
+                    + ')'
                 )
             if level[0] & IndexedComponent_slice.SET_MASK:
                 ans += ' = %r' % (level[2],)
@@ -290,34 +313,39 @@ class IndexedComponent_slice(object):
         return ans
 
     def __hash__(self):
-        return hash(tuple(_freeze(x) for x in self._call_stack[:self._len]))
+        return hash(tuple(_freeze(x) for x in self._call_stack[: self._len]))
 
     def __eq__(self, other):
         if other is self:
             return True
         if type(other) is not IndexedComponent_slice:
             return False
-        return tuple(_freeze(x) for x in self._call_stack[:self._len]) \
-            == tuple(_freeze(x) for x in other._call_stack[:other._len])
+        return tuple(_freeze(x) for x in self._call_stack[: self._len]) == tuple(
+            _freeze(x) for x in other._call_stack[: other._len]
+        )
 
     def __ne__(self, other):
         return not self.__eq__(other)
 
     def duplicate(self):
         ans = IndexedComponent_slice(self)
-        ans._call_stack = ans._call_stack[:ans._len]
+        ans._call_stack = ans._call_stack[: ans._len]
         return ans
 
-    def index_wildcard_keys(self):
-        _iter = _IndexedComponent_slice_iter(self, iter_over_index=True)
+    def index_wildcard_keys(self, sort):
+        _iter = _IndexedComponent_slice_iter(self, iter_over_index=True, sort=sort)
         return (_iter.get_last_index_wildcards() for _ in _iter)
 
-    def wildcard_keys(self):
-        _iter = self.__iter__()
+    def wildcard_keys(self, sort=SortComponents.UNSORTED):
+        _iter = _IndexedComponent_slice_iter(self, sort=sort)
         return (_iter.get_last_index_wildcards() for _ in _iter)
 
-    def wildcard_items(self):
-        _iter = self.__iter__()
+    def wildcard_values(self, sort=SortComponents.UNSORTED):
+        """Return an iterator over this slice"""
+        return _IndexedComponent_slice_iter(self, sort=sort)
+
+    def wildcard_items(self, sort=SortComponents.UNSORTED):
+        _iter = _IndexedComponent_slice_iter(self, sort=sort)
         return ((_iter.get_last_index_wildcards(), _) for _ in _iter)
 
     def expanded_keys(self):
@@ -334,9 +362,9 @@ def _freeze(info):
         return (
             info[0],
             id(info[1][0]),  # id of the Component
-            tuple(info[1][1].items()), # {idx: value} for fixed
+            tuple(info[1][1].items()),  # {idx: value} for fixed
             tuple(info[1][2].keys()),  # {idx: slice} for slices
-            info[1][3]  # elipsis index
+            info[1][3],  # ellipsis index
         )
     elif info[0] & IndexedComponent_slice.ITEM_MASK:
         if type(info[1]) is not tuple:
@@ -345,45 +373,59 @@ def _freeze(info):
             index = info[1]
         return (
             info[0],
-            tuple( (x.start,x.stop,x.step) if type(x) is slice else x
-                   for x in index ),
+            tuple((x.start, x.stop, x.step) if type(x) is slice else x for x in index),
             info[2:],
         )
     else:
         return info
 
 
-
-class _slice_generator(object):
+class _slice_generator:
     """Utility (iterator) for generating the elements of one slice
 
     Iterate through the component index and yield the component data
     values that match the slice template.
     """
-    def __init__(self, component, fixed, sliced, ellipsis, iter_over_index):
+
+    def __init__(self, component, fixed, sliced, ellipsis, iter_over_index, sort):
         self.component = component
         self.fixed = fixed
         self.sliced = sliced
         self.ellipsis = ellipsis
         self.iter_over_index = iter_over_index
 
+        # Cache for the most recent index returned. This is used to
+        # iterate over keys of the slice (for instance, in a
+        # _ReferenceDict).
+        self.last_index = ()
+
         self.tuplize_unflattened_index = (
-            self.component._implicit_subsets is None
-            or len(self.component._implicit_subsets) == 1 )
+            len(list(self.component.index_set().subsets())) <= 1
+        )
+
+        if fixed is None and sliced is None and ellipsis is None:
+            # This is a slice rooted at a concrete component.  This is
+            # unusual (i.e., it is generated programmatically and not
+            # through the normal slice/ellipsis notation).  We will mock
+            # up a "generator" so that the slice can be cleanly iterated
+            # over
+            self.explicit_index_count = 0
+            self.component_iter = _NotIterable
+            return
 
         self.explicit_index_count = len(fixed) + len(sliced)
         if iter_over_index and component.index_set().isfinite():
             # This should be used to iterate over all the potential
             # indices of a sparse IndexedComponent.
-            self.component_iter = component.index_set().__iter__()
+            if SortComponents.SORTED_INDICES in sort:
+                self.component_iter = component.index_set().sorted_iter()
+            elif SortComponents.ORDERED_INDICES in sort:
+                self.component_iter = component.index_set().ordered_iter()
+            else:
+                self.component_iter = iter(component.index_set())
         else:
             # The default behavior is to iterate over the component.
-            self.component_iter = component.__iter__()
-
-        # Cache for the most recent index returned. This is used to
-        # iterate over keys of the slice (for instance, in a
-        # _ReferenceDict).
-        self.last_index = None
+            self.component_iter = component.keys(sort)
 
     def next(self):
         """__next__() iterator for Py2 compatibility"""
@@ -394,6 +436,13 @@ class _slice_generator(object):
         # imports.  Ideally, we would move normalize_index to another
         # module to resolve this.
         from .indexed_component import normalize_index
+
+        if self.component_iter is _NotIterable:
+            # Special case handling for "slices" rooted at concrete
+            # components.  We will replace the iterator with an "empty"
+            # iterator so that the next call will raise StopIteration
+            self.component_iter = iter(())
+            return self.component
 
         while 1:
             # Note: running off the end of the underlying iterator will
@@ -432,7 +481,7 @@ class _slice_generator(object):
                 # we can use the cached indices to iterate over "indices"
                 # of a slice.
                 #
-                # last_index is the most recent index encountered, not 
+                # last_index is the most recent index encountered, not
                 # the last index that will ever be encountered.
                 self.last_index = _idx
 
@@ -452,23 +501,36 @@ class _slice_generator(object):
                     # None.
                     return None
 
+
 # Backwards compatibility
 _IndexedComponent_slice = IndexedComponent_slice
+
 
 # Mock up a callable object with a "check_complete" method
 def _advance_iter(_iter):
     return next(_iter)
+
+
 def _advance_iter_check_complete():
     pass
+
+
 _advance_iter.check_complete = _advance_iter_check_complete
 
+
 # A dummy class that we can use as a named entity below
-class _NotIterable(object): pass
+class _NotIterable:
+    pass
 
 
-class _IndexedComponent_slice_iter(object):
-    def __init__(self, component_slice, advance_iter=_advance_iter,
-                 iter_over_index=False):
+class _IndexedComponent_slice_iter:
+    def __init__(
+        self,
+        component_slice,
+        advance_iter=_advance_iter,
+        iter_over_index=False,
+        sort=False,
+    ):
         # _iter_stack holds a list of elements X where X is either a
         # _slice_generator iterator (if this level in the hierarchy is a
         # slice) or None (if this level is either a SimpleComponent,
@@ -476,16 +538,20 @@ class _IndexedComponent_slice_iter(object):
         self._slice = component_slice
         self.advance_iter = advance_iter
         self._iter_over_index = iter_over_index
+        self._sort = SortComponents(sort)
         call_stack = self._slice._call_stack
         call_stack_len = self._slice._len
-        self._iter_stack = [None]*call_stack_len
+        self._iter_stack = [None] * call_stack_len
         # Initialize the top of the `_iter_stack` (deepest part of the
         # model hierarchy):
         if call_stack[0][0] == IndexedComponent_slice.slice_info:
             # The root of the _iter_stack is a generator for the
             # "highest-level slice" (slice closest to the model() block)
             self._iter_stack[0] = _slice_generator(
-                *call_stack[0][1], iter_over_index=self._iter_over_index)
+                *call_stack[0][1],
+                iter_over_index=self._iter_over_index,
+                sort=self._sort,
+            )
             # call_stack[0][1] is a (fixed, sliced, ellipsis) tuple, where
             # fixed and sliced are dicts.
         elif call_stack[0][0] == IndexedComponent_slice.set_item:
@@ -497,10 +563,11 @@ class _IndexedComponent_slice_iter(object):
             # is not an iterable thing, so we will will use a type flag
             # to signal this case to __next__below.
             assert call_stack_len == 1
-            self._iter_stack[0] = _NotIterable # Something not None
+            self._iter_stack[0] = _NotIterable  # Something not None
         else:
-            raise DeveloperError("Unexpected call_stack flag encountered: %s"
-                                 % call_stack[0][0])
+            raise DeveloperError(
+                "Unexpected call_stack flag encountered: %s" % call_stack[0][0]
+            )
 
     def __iter__(self):
         """This class implements the iterator API"""
@@ -517,7 +584,7 @@ class _IndexedComponent_slice_iter(object):
         #
         # NOTE: We refer to this stack as growing "downward", just like
         # the model hierarchy to which it refers.
-        idx = len(self._iter_stack)-1
+        idx = len(self._iter_stack) - 1
         while True:
             # Flush out any non-slice levels.  Since we initialize
             # _iter_stack with None, in the first call this will
@@ -534,7 +601,7 @@ class _IndexedComponent_slice_iter(object):
             try:
                 if self._iter_stack[idx] is _NotIterable:
                     # This happens when attempting a `set_item` call on
-                    # a `_ReferenceDict` whose slice consists of only a 
+                    # a `_ReferenceDict` whose slice consists of only a
                     # `slice_info` entry.
                     # E.g.
                     #     ref = Reference(m.x[:])
@@ -600,8 +667,10 @@ class _IndexedComponent_slice_iter(object):
                         # things that match.  We will allow users to
                         # (silently) ignore any attribute errors generated
                         # by concrete indices in the slice hierarchy...
-                        if self._slice.attribute_errors_generate_exceptions \
-                           and not self._iter_over_index:
+                        if (
+                            self._slice.attribute_errors_generate_exceptions
+                            and not self._iter_over_index
+                        ):
                             raise
                         # Break from the inner loop; next action will be to
                         # advance the "highest-level iterator"
@@ -609,15 +678,17 @@ class _IndexedComponent_slice_iter(object):
                 elif _call[0] == IndexedComponent_slice.get_item:
                     try:
                         # Get the specified index for the current component:
-                        _comp = _comp.__getitem__( _call[1] )
+                        _comp = _comp.__getitem__(_call[1])
                     except LookupError:
                         # Since we are slicing, we may only be
                         # interested in things that match.  We will
                         # allow users to (silently) ignore any key
                         # errors generated by concrete indices in the
                         # slice hierarchy...
-                        if self._slice.key_errors_generate_exceptions \
-                           and not self._iter_over_index:
+                        if (
+                            self._slice.key_errors_generate_exceptions
+                            and not self._iter_over_index
+                        ):
                             raise
                         break
                     # If the index defines a slice, add a slice generator
@@ -630,12 +701,13 @@ class _IndexedComponent_slice_iter(object):
                         assert _comp._len == 1
                         self._iter_stack[idx] = _slice_generator(
                             *_comp._call_stack[0][1],
-                            iter_over_index=self._iter_over_index
+                            iter_over_index=self._iter_over_index,
+                            sort=self._sort,
                         )
                         try:
                             # Advance to get the first component defined
                             # by this slice (so that we have a concrete
-                            # context that we can use to decend further
+                            # context that we can use to descend further
                             # down the model hierarchy):
                             _comp = self.advance_iter(self._iter_stack[idx])
                             # Note that the iterator will remained
@@ -661,15 +733,17 @@ class _IndexedComponent_slice_iter(object):
                     try:
                         # Assume the callable "comp" in our hierarchy
                         # returns a component:
-                        _comp = _comp( *(_call[1]), **(_call[2]) )
+                        _comp = _comp(*(_call[1]), **(_call[2]))
                     except:
                         # Since we are slicing, we may only be
                         # interested in things that match.  We will
                         # allow users to (silently) ignore any key
                         # errors generated by concrete indices in the
                         # slice hierarchy...
-                        if self._slice.call_errors_generate_exceptions \
-                           and not self._iter_over_index:
+                        if (
+                            self._slice.call_errors_generate_exceptions
+                            and not self._iter_over_index
+                        ):
                             raise
                         break
                 elif _call[0] == IndexedComponent_slice.set_attribute:
@@ -707,7 +781,9 @@ class _IndexedComponent_slice_iter(object):
                     # _iter_stack value to _NotIterable.
                     if self._iter_stack[idx] is _NotIterable:
                         _iter = _slice_generator(
-                            *_call[1], iter_over_index=self._iter_over_index
+                            *_call[1],
+                            iter_over_index=self._iter_over_index,
+                            sort=self._sort,
                         )
                         while True:
                             # This ends when the _slice_generator raises
@@ -728,22 +804,25 @@ class _IndexedComponent_slice_iter(object):
                     # our current advance_iter to walk it and set only
                     # the appropriate keys
                     try:
-                        _tmp = _comp.__getitem__( _call[1] )
+                        _tmp = _comp.__getitem__(_call[1])
                     except KeyError:
                         # Since we are slicing, we may only be
                         # interested in things that match.  We will
                         # allow users to (silently) ignore any key
                         # errors generated by concrete indices in the
                         # slice hierarchy...
-                        if self._slice.key_errors_generate_exceptions \
-                           and not self._iter_over_index:
+                        if (
+                            self._slice.key_errors_generate_exceptions
+                            and not self._iter_over_index
+                        ):
                             raise
                         break
                     if _tmp.__class__ is IndexedComponent_slice:
                         # Extract the _slice_generator and evaluate it.
                         assert _tmp._len == 1
                         _iter = _IndexedComponent_slice_iter(
-                            _tmp, self.advance_iter)
+                            _tmp, self.advance_iter, sort=self._sort
+                        )
                         for _ in _iter:
                             # Check to make sure the custom iterator
                             # (i.e._fill_in_known_wildcards) is complete
@@ -771,7 +850,7 @@ class _IndexedComponent_slice_iter(object):
                     # our current advance_iter to walk it and delete the
                     # appropriate keys
                     try:
-                        _tmp = _comp.__getitem__( _call[1] )
+                        _tmp = _comp.__getitem__(_call[1])
                     except KeyError:
                         # Since we are slicing, we may only be
                         # interested in things that match.  We will
@@ -785,7 +864,8 @@ class _IndexedComponent_slice_iter(object):
                         # Extract the _slice_generator and evaluate it.
                         assert _tmp._len == 1
                         _iter = _IndexedComponent_slice_iter(
-                            _tmp, self.advance_iter)
+                            _tmp, self.advance_iter, sort=self._sort
+                        )
                         _idx_to_del = []
                         # Two passes, so that we don't edit the _data
                         # dicts while we are iterating over them
@@ -815,7 +895,8 @@ class _IndexedComponent_slice_iter(object):
                 else:
                     raise DeveloperError(
                         "Unexpected entry in IndexedComponent_slice "
-                        "_call_stack: %s" % (_call[0],))
+                        "_call_stack: %s" % (_call[0],)
+                    )
                 idx += 1
 
             if idx == self._slice._len:
@@ -826,10 +907,7 @@ class _IndexedComponent_slice_iter(object):
                 return _comp
 
     def get_last_index(self):
-        ans = sum(
-            ( x.last_index for x in self._iter_stack if x is not None ),
-            ()
-        )
+        ans = sum((x.last_index for x in self._iter_stack if x is not None), ())
         if len(ans) == 1:
             return ans[0]
         else:
@@ -848,14 +926,20 @@ class _IndexedComponent_slice_iter(object):
         # Extract the indices corresponding to the wildcard positions
         # for that slice.
         ans = sum(
-            ( tuple( x.last_index[i]
-                     for i in range(len(x.last_index))
-                     if i not in x.fixed )
-              for x in self._iter_stack if x is not None ),
-            ()
+            (
+                tuple(
+                    x.last_index[i]
+                    for i in range(len(x.last_index))
+                    if i not in x.fixed
+                )
+                for x in self._iter_stack
+                if x is not None
+            ),
+            (),
         )
+        if not ans:
+            return UnindexedComponent_index
         if len(ans) == 1:
             return ans[0]
         else:
             return ans
-

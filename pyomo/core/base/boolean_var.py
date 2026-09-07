@@ -1,37 +1,38 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import logging
 from weakref import ref as weakref_ref, ReferenceType
 
-from pyomo.common.deprecation import RenamedClass
+from pyomo.common.deprecation import deprecation_warning, RenamedClass
 from pyomo.common.log import is_debug_set
-from pyomo.common.timing import ConstructionTimer
 from pyomo.common.modeling import unique_component_name, NOTSET
-from pyomo.common.deprecation import deprecation_warning
+from pyomo.common.timing import ConstructionTimer
+from pyomo.core.staleflag import StaleFlagManager
 from pyomo.core.expr.boolean_value import BooleanValue
+from pyomo.core.expr import GetItemExpression
+from pyomo.core.expr.expr_common import _type_check_exception_arg
 from pyomo.core.expr.numvalue import value
 from pyomo.core.base.component import ComponentData, ModelComponentFactory
-from pyomo.core.base.indexed_component import (IndexedComponent,
-                                               UnindexedComponent_set)
+from pyomo.core.base.global_set import UnindexedComponent_index
+from pyomo.core.base.indexed_component import IndexedComponent, UnindexedComponent_set
 from pyomo.core.base.misc import apply_indexed_rule
 from pyomo.core.base.set import Set, BooleanSet, Binary
 from pyomo.core.base.util import is_functor
 from pyomo.core.base.var import Var
 
-
 logger = logging.getLogger('pyomo.core')
 
 _logical_var_types = {bool, type(None)}
 
-class _DeprecatedImplicitAssociatedBinaryVariable(object):
+
+class _DeprecatedImplicitAssociatedBinaryVariable:
     __slots__ = ('_boolvar',)
 
     def __init__(self, boolvar):
@@ -39,48 +40,80 @@ class _DeprecatedImplicitAssociatedBinaryVariable(object):
 
     def __call__(self):
         deprecation_warning(
-                "Relying on core.logical_to_linear to transform "
-                "BooleanVars that do not appear in LogicalConstraints "
-                "is deprecated. Please associate your own binaries if "
-                "you have BooleanVars not used in logical expressions.",
-                version='6.2')
+            "Relying on core.logical_to_linear to transform "
+            "BooleanVars that do not appear in LogicalConstraints "
+            "is deprecated. Please associate your own binaries if "
+            "you have BooleanVars not used in logical expressions.",
+            version='6.2',
+        )
 
         parent_block = self._boolvar().parent_block()
         new_var = Var(domain=Binary)
         parent_block.add_component(
-            unique_component_name(parent_block, 
-                                  self._boolvar().local_name + "_asbinary"),
-            new_var)
+            unique_component_name(
+                parent_block, self._boolvar().local_name + "_asbinary"
+            ),
+            new_var,
+        )
         self._boolvar()._associated_binary = None
         self._boolvar().associate_binary_var(new_var)
         return new_var
 
     def __getstate__(self):
-        return {'_boolvar': self._boolvar()}
+        return self._boolvar()
 
     def __setstate__(self, state):
-        self._boolvar = weakref_ref(state['_boolvar'])
+        self._boolvar = weakref_ref(state)
 
-class _BooleanVarData(ComponentData, BooleanValue):
-    """
-    This class defines the data for a single variable.
 
-    Constructor Arguments:
-        component   The BooleanVar object that owns this data.
-    Public Class Attributes:
-        fixed       If True, then this variable is treated as a
-                        fixed constant in the model.
-        stale       A Boolean indicating whether the value of this variable is
-                        legitimate.  This value is true if the value should
-                        be considered legitimate for purposes of reporting or
-                        other interrogation.
-        value       The numeric value of this variable.
+def _associated_binary_mapper(encode, val):
+    if val is None:
+        return None
+    if encode:
+        if val.__class__ is not _DeprecatedImplicitAssociatedBinaryVariable:
+            return val()
+    else:
+        if val.__class__ is not _DeprecatedImplicitAssociatedBinaryVariable:
+            return weakref_ref(val)
+    return val
+
+
+class BooleanVarData(ComponentData, BooleanValue):
+    """This class defines the data for a single Boolean variable.
+
+    Parameters
+    ----------
+    component: Component
+        The BooleanVar object that owns this data.
+
+    Attributes
+    ----------
+    fixed: bool
+        If True, then this variable is treated as a fixed constant in
+        the model.
+
     """
-    __slots__ = ()
+
+    __slots__ = ('_value', 'fixed', '_stale', '_associated_binary')
+    __autoslot_mappers__ = {
+        '_associated_binary': _associated_binary_mapper,
+        '_stale': StaleFlagManager.stale_mapper,
+    }
 
     def __init__(self, component=None):
-        self._component = weakref_ref(component) if (component is not None) \
-                          else None
+        #
+        # These lines represent in-lining of the
+        # following constructors:
+        #   - BooleanVarData
+        #   - ComponentData
+        #   - BooleanValue
+        self._component = weakref_ref(component) if (component is not None) else None
+        self._index = NOTSET
+        self._value = None
+        self.fixed = False
+        self._stale = 0  # True
+
+        self._associated_binary = None
 
     def is_fixed(self):
         """Returns True if this variable is fixed, otherwise returns False."""
@@ -110,39 +143,81 @@ class _BooleanVarData(ComponentData, BooleanValue):
         # name of efficiency.
         if val.__class__ not in _logical_var_types:
             if not skip_validation:
-                logger.warning("implicitly casting '%s' value %s to bool"
-                               % (self.name, val))
+                logger.warning(
+                    "implicitly casting '%s' value %s to bool" % (self.name, val)
+                )
             val = bool(val)
         self._value = val
-        self.stale = False
+        self._stale = StaleFlagManager.get_flag(self._stale)
 
     def clear(self):
         self.value = None
 
-
-    def __call__(self, exception=True):
+    def __call__(self, exception=NOTSET):
         """Compute the value of this variable."""
+        exception = _type_check_exception_arg(self, exception)
         return self.value
 
     @property
     def value(self):
-        """Return the value for this variable."""
-        raise NotImplementedError
+        """bool : the current value for this variable."""
+        return self._value
+
+    @value.setter
+    def value(self, val):
+        self.set_value(val)
 
     @property
     def domain(self):
-        """Return the domain for this variable."""
-        raise NotImplementedError
-
-    @property
-    def fixed(self):
-        """Return the fixed indicator for this variable."""
-        raise NotImplementedError
+        """BooleanSet : the domain for this variable."""
+        return BooleanSet
 
     @property
     def stale(self):
-        """Return the stale indicator for this variable."""
-        raise NotImplementedError
+        """
+        bool : A Boolean indicating whether the value of this variable is
+        Consistent with the most recent solve.  `True` indicates that
+        this variable's value was set prior to the most recent solve and
+        was not updated by the results returned by the solve.
+        """
+        return StaleFlagManager.is_stale(self._stale)
+
+    @stale.setter
+    def stale(self, val):
+        if val:
+            self._stale = 0
+        else:
+            self._stale = StaleFlagManager.get_flag(0)
+
+    def get_associated_binary(self):
+        """Get the binary VarData associated with this
+        BooleanVarData"""
+        return (
+            self._associated_binary() if self._associated_binary is not None else None
+        )
+
+    def associate_binary_var(self, binary_var):
+        """Associate a binary VarData to this BooleanVarData"""
+        if (
+            self._associated_binary is not None
+            and type(self._associated_binary)
+            is not _DeprecatedImplicitAssociatedBinaryVariable
+        ):
+            raise RuntimeError(
+                "Reassociating BooleanVar '%s' (currently associated "
+                "with '%s') with '%s' is not allowed"
+                % (
+                    self.name,
+                    (
+                        self._associated_binary().name
+                        if self._associated_binary is not None
+                        else None
+                    ),
+                    binary_var.name if binary_var is not None else None,
+                )
+            )
+        if binary_var is not None:
+            self._associated_binary = weakref_ref(binary_var)
 
     def fix(self, value=NOTSET, skip_validation=False):
         """Fix the value of this variable (treat as nonvariable)
@@ -157,7 +232,7 @@ class _BooleanVarData(ComponentData, BooleanValue):
             self.set_value(value, skip_validation)
 
     def unfix(self):
-        """Unfix this varaible (treat as variable)
+        """Unfix this variable (treat as variable)
 
         This sets the `fixed` indicator to False.
 
@@ -169,105 +244,14 @@ class _BooleanVarData(ComponentData, BooleanValue):
         return self.unfix()
 
 
-class _GeneralBooleanVarData(_BooleanVarData):
-    """
-    This class defines the data for a single Boolean variable.
+class _BooleanVarData(metaclass=RenamedClass):
+    __renamed__new_class__ = BooleanVarData
+    __renamed__version__ = '6.7.2'
 
-    Constructor Arguments:
-        component   The BooleanVar object that owns this data.
 
-    Public Class Attributes:
-        domain      The domain of this variable.
-        fixed       If True, then this variable is treated as a
-                        fixed constant in the model.
-        stale       A Boolean indicating whether the value of this variable is
-                        legitimiate.  This value is true if the value should
-                        be considered legitimate for purposes of reporting or
-                        other interrogation.
-        value       The numeric value of this variable.
-
-    The domain attribute is a property because it is
-    too widely accessed directly to enforce explicit getter/setter
-    methods and we need to deter directly modifying or accessing
-    these attributes in certain cases.
-    """
-
-    __slots__ = ('_value', 'fixed', 'stale', '_associated_binary')
-
-    def __init__(self, component=None):
-        #
-        # These lines represent in-lining of the
-        # following constructors:
-        #   - _BooleanVarData
-        #   - ComponentData
-        #   - BooleanValue
-        self._component = weakref_ref(component) if (component is not None) \
-                          else None
-        self._value = None
-        self.fixed = False
-        self.stale = True
-
-        self._associated_binary = None
-
-    def __getstate__(self):
-        state = super().__getstate__()
-        for i in _GeneralBooleanVarData.__slots__:
-            state[i] = getattr(self, i)
-        if isinstance(self._associated_binary, ReferenceType):
-            state['_associated_binary'] = self._associated_binary()
-        return state
-
-    def __setstate__(self, state):
-        """Restore a picked state into this instance.
-
-        Note: adapted from class ComponentData in pyomo.core.base.component
-
-        """
-        super().__setstate__(state)
-        if self._associated_binary is not None and \
-           type(self._associated_binary) is not \
-           _DeprecatedImplicitAssociatedBinaryVariable:
-            self._associated_binary = weakref_ref(self._associated_binary)
-
-    #
-    # Abstract Interface
-    #
-
-    # value is an attribute
-
-    @property
-    def value(self):
-        """Return (or set) the value for this variable."""
-        return self._value
-    @value.setter
-    def value(self, val):
-        self.set_value(val)
-
-    @property
-    def domain(self):
-        """Return the domain for this variable."""
-        return BooleanSet
-
-    def get_associated_binary(self):
-        """Get the binary _VarData associated with this 
-        _GeneralBooleanVarData"""
-        return self._associated_binary() if self._associated_binary \
-            is not None else None
-
-    def associate_binary_var(self, binary_var):
-        """Associate a binary _VarData to this _GeneralBooleanVarData"""
-        if self._associated_binary is not None and \
-           type(self._associated_binary) is not \
-           _DeprecatedImplicitAssociatedBinaryVariable:
-            raise RuntimeError(
-                "Reassociating BooleanVar '%s' (currently associated "
-                "with '%s') with '%s' is not allowed" % (
-                    self.name,
-                    self._associated_binary().name
-                    if self._associated_binary is not None else None,
-                    binary_var.name if binary_var is not None else None))
-        if binary_var is not None:
-            self._associated_binary = weakref_ref(binary_var)
+class _GeneralBooleanVarData(metaclass=RenamedClass):
+    __renamed__new_class__ = BooleanVarData
+    __renamed__version__ = '6.7.2'
 
 
 @ModelComponentFactory.register("Logical decision variables.")
@@ -283,21 +267,21 @@ class BooleanVar(IndexedComponent):
             variables returned by `initialize`/`rule` (False).  Defaults
             to True.
     """
-    _ComponentDataClass = _GeneralBooleanVarData
+
+    _ComponentDataClass = BooleanVarData
 
     def __new__(cls, *args, **kwds):
         if cls != BooleanVar:
             return super(BooleanVar, cls).__new__(cls)
-        if not args or (args[0] is UnindexedComponent_set and len(args)==1):
+        if not args or (args[0] is UnindexedComponent_set and len(args) == 1):
             return ScalarBooleanVar.__new__(ScalarBooleanVar)
         else:
-            return IndexedBooleanVar.__new__(IndexedBooleanVar) 
+            return IndexedBooleanVar.__new__(IndexedBooleanVar)
 
     def __init__(self, *args, **kwd):
         initialize = kwd.pop('initialize', None)
         initialize = kwd.pop('rule', initialize)
         self._dense = kwd.pop('dense', True)
-
 
         kwd.setdefault('ctype', BooleanVar)
         IndexedComponent.__init__(self, *args, **kwd)
@@ -308,33 +292,29 @@ class BooleanVar(IndexedComponent):
         self._value_init_value = None
         self._value_init_rule = None
 
-        if is_functor(initialize) and (
-                not isinstance(initialize, BooleanValue)):
+        if is_functor(initialize) and (not isinstance(initialize, BooleanValue)):
             self._value_init_rule = initialize
         else:
             self._value_init_value = initialize
-
-    def is_expression_type(self):
-        """Returns False because this is not an expression"""
-        return False
 
     def flag_as_stale(self):
         """
         Set the 'stale' attribute of every variable data object to True.
         """
         for boolvar_data in self._data.values():
-            boolvar_data.stale = True
+            boolvar_data._stale = 0
 
     def get_values(self, include_fixed_values=True):
         """
         Return a dictionary of index-value pairs.
         """
         if include_fixed_values:
-            return dict((idx, vardata.value)
-                        for idx, vardata in self._data.items())
-        return dict((idx, vardata.value)
-                    for idx, vardata in self._data.items()
-                    if not vardata.fixed)
+            return dict((idx, vardata.value) for idx, vardata in self._data.items())
+        return dict(
+            (idx, vardata.value)
+            for idx, vardata in self._data.items()
+            if not vardata.fixed
+        )
 
     extract_values = get_values
 
@@ -348,25 +328,28 @@ class BooleanVar(IndexedComponent):
         for index, new_value in new_values.items():
             self[index].set_value(new_value, skip_validation)
 
-
     def construct(self, data=None):
         """Construct this component."""
-        if is_debug_set(logger):   #pragma:nocover
+        if is_debug_set(logger):  # pragma:nocover
             try:
                 name = str(self.name)
             except:
                 name = type(self)
             logger.debug(
-                "Constructing Variable, name=%s, from data=%s"
-                % (name, str(data)))
+                "Constructing Variable, name=%s, from data=%s" % (name, str(data))
+            )
 
         if self._constructed:
             return
         timer = ConstructionTimer(self)
         self._constructed = True
 
+        if self._anonymous_sets is not None:
+            for _set in self._anonymous_sets:
+                _set.construct()
+
         #
-        # Construct _BooleanVarData objects for all index values
+        # Construct BooleanVarData objects for all index values
         #
         if not self.is_indexed():
             self._data[None] = self
@@ -376,11 +359,16 @@ class BooleanVar(IndexedComponent):
             # Calling dict.update((...) for ...) is roughly
             # 30% slower
             self_weakref = weakref_ref(self)
-            for ndx in self._index:
+            for ndx in self._index_set:
                 cdata = self._ComponentDataClass(component=None)
                 cdata._component = self_weakref
                 self._data[ndx] = cdata
-            self._initialize_members(self._index)
+                # NOTE: This is a special case where a key, value pair is added
+                # to the _data dictionary without calling
+                # _getitem_when_not_present, which is why we need to set the
+                # index here.
+                cdata._index = ndx
+            self._initialize_members(self._index_set)
         timer.report()
 
     def add(self, index):
@@ -398,7 +386,9 @@ class BooleanVar(IndexedComponent):
         else:
             obj = self._data[index] = self._ComponentDataClass(component=self)
         self._initialize_members((index,))
+        obj._index = index
         return obj
+
     def _setitem_when_not_present(self, index, value):
         """Perform the fundamental component item creation and storage.
 
@@ -425,10 +415,9 @@ class BooleanVar(IndexedComponent):
             if self.is_indexed():
                 for key in init_set:
                     vardata = self._data[key]
-                    val = apply_indexed_rule(self,
-                                             self._value_init_rule,
-                                             self._parent(),
-                                             key)
+                    val = apply_indexed_rule(
+                        self, self._value_init_rule, self._parent(), key
+                    )
                     val = value(val)
                     vardata.set_value(val)
             else:
@@ -458,35 +447,26 @@ class BooleanVar(IndexedComponent):
 
     def _pprint(self):
         """
-            Print component information.
+        Print component information.
         """
-        return ( [("Size", len(self)),
-                  ("Index", self._index if self.is_indexed() else None),
-                  ],
-                 self._data.items(),
-                 ( "Value","Fixed","Stale"),
-                 lambda k, v: [ v.value,
-                                v.fixed,
-                                v.stale,
-                                ]
-                 )
+        return (
+            [
+                ("Size", len(self)),
+                ("Index", self._index_set if self.is_indexed() else None),
+            ],
+            self.items,
+            ("Value", "Fixed", "Stale"),
+            lambda k, v: [v.value, v.fixed, v.stale],
+        )
 
 
-class ScalarBooleanVar(_GeneralBooleanVarData, BooleanVar):
-    
+class ScalarBooleanVar(BooleanVarData, BooleanVar):
     """A single variable."""
-    def __init__(self, *args, **kwd):
-        _GeneralBooleanVarData.__init__(self, component=self)
-        BooleanVar.__init__(self, *args, **kwd)
 
-    """
-    # Since this class derives from Component and Component.__getstate__
-    # just packs up the entire __dict__ into the state dict, we do not
-    # need to define the __getstate__ or __setstate__ methods.
-    # We just defer to the super() get/set state.  Since all of our
-    # get/set state methods rely on super() to traverse the MRO, this
-    # will automatically pick up both the Component and Data base classes.
-    #
+    def __init__(self, *args, **kwd):
+        BooleanVarData.__init__(self, component=self)
+        BooleanVar.__init__(self, *args, **kwd)
+        self._index = UnindexedComponent_index
 
     #
     # Override abstract interface methods to first check for
@@ -495,33 +475,32 @@ class ScalarBooleanVar(_GeneralBooleanVarData, BooleanVar):
 
     # NOTE: that we can't provide these errors for
     # fixed and stale because they are attributes
-    """
 
     @property
     def value(self):
-        """Return the value for this variable."""
+        """bool : the current value of this variable."""
         if self._constructed:
-            return _GeneralBooleanVarData.value.fget(self)
+            return BooleanVarData.value.fget(self)
         raise ValueError(
             "Accessing the value of variable '%s' "
             "before the Var has been constructed (there "
-            "is currently no value to return)."
-            % (self.name))
+            "is currently no value to return)." % (self.name)
+        )
 
     @value.setter
     def value(self, val):
-        """Set the value for this variable."""
         if self._constructed:
-            return _GeneralBooleanVarData.value.fset(self, val)
+            return BooleanVarData.value.fset(self, val)
         raise ValueError(
             "Setting the value of variable '%s' "
             "before the Var has been constructed (there "
-            "is currently nothing to set."
-            % (self.name))
+            "is currently nothing to set." % (self.name)
+        )
 
     @property
     def domain(self):
-        return _GeneralBooleanVarData.domain.fget(self)
+        """BooleanSet : the domain for this variable."""
+        return BooleanVarData.domain.fget(self)
 
     def fix(self, value=NOTSET, skip_validation=False):
         """
@@ -529,22 +508,22 @@ class ScalarBooleanVar(_GeneralBooleanVarData, BooleanVar):
         indicating the variable should be fixed at its current value.
         """
         if self._constructed:
-            return _GeneralBooleanVarData.fix(self, value, skip_validation)
+            return BooleanVarData.fix(self, value, skip_validation)
         raise ValueError(
             "Fixing variable '%s' "
             "before the Var has been constructed (there "
-            "is currently nothing to set)."
-            % (self.name))
+            "is currently nothing to set)." % (self.name)
+        )
 
     def unfix(self):
         """Sets the fixed indicator to False."""
         if self._constructed:
-            return _GeneralBooleanVarData.unfix(self)
+            return BooleanVarData.unfix(self)
         raise ValueError(
             "Freeing variable '%s' "
             "before the Var has been constructed (there "
-            "is currently nothing to set)."
-            % (self.name))
+            "is currently nothing to set)." % (self.name)
+        )
 
 
 class SimpleBooleanVar(metaclass=RenamedClass):
@@ -568,7 +547,7 @@ class IndexedBooleanVar(BooleanVar):
             boolean_vardata.fix(value, skip_validation)
 
     def unfix(self):
-        """Unfix all varaibles in this IndexedBooleanVar (treat as variable)
+        """Unfix all variables in this IndexedBooleanVar (treat as variable)
 
         This sets the `fixed` indicator to False for every variable in
         this IndexedBooleanVar.
@@ -583,8 +562,21 @@ class IndexedBooleanVar(BooleanVar):
 
     @property
     def domain(self):
+        """BooleanSet : the domain for this variable."""
         return BooleanSet
-    
+
+    # Because Emma wants crazy things... (Where crazy things are the ability to
+    # index BooleanVars by other (integer) Vars and integer-valued
+    # expressions--a thing you can do in Constraint Programming.)
+    def __getitem__(self, args):
+        tmp = args if args.__class__ is tuple else (args,)
+        if any(
+            hasattr(arg, 'is_potentially_variable') and arg.is_potentially_variable()
+            for arg in tmp
+        ):
+            return GetItemExpression((self,) + tmp)
+        return super().__getitem__(args)
+
 
 @ModelComponentFactory.register("List of logical decision variables.")
 class BooleanVarList(IndexedBooleanVar):
@@ -609,23 +601,19 @@ class BooleanVarList(IndexedBooleanVar):
         # then let _validate_index complain when we set the value.
         if self._value_init_value.__class__ is dict:
             for i in range(len(self._value_init_value)):
-                self._index.add(i + self._starting_index)
-        super(BooleanVarList,self).construct(data)
+                self._index_set.add(i + self._starting_index)
+        super(BooleanVarList, self).construct(data)
         # Note that the current Var initializer silently ignores
         # initialization data that is not in the underlying index set.  To
         # ensure that at least here all initialization data is added to the
         # VarList (so we get potential domain errors), we will re-set
         # everything.
         if self._value_init_value.__class__ is dict:
-            for k,v in self._value_init_value.items():
+            for k, v in self._value_init_value.items():
                 self[k] = v
 
     def add(self):
         """Add a variable to this list."""
-        next_idx = len(self._index) + self._starting_index
-        self._index.add(next_idx)
+        next_idx = len(self._index_set) + self._starting_index
+        self._index_set.add(next_idx)
         return self[next_idx]
-
-
-
-

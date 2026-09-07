@@ -1,40 +1,56 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 #
 # Unit Tests for model transformations
 #
 
 import os
 from os.path import abspath, dirname
-currdir = dirname(abspath(__file__))+os.sep
+
+currdir = dirname(abspath(__file__)) + os.sep
 
 import pyomo.common.unittest as unittest
 
 from pyomo.common.tempfiles import TempfileManager
 from pyomo.opt import check_available_solvers
-from pyomo.environ import (AbstractModel, Set, RangeSet, Objective, 
-                           Constraint, Var, Block, Integers, Boolean, 
-                           Binary, Reals, RealSet, NonNegativeIntegers,
-                           NonNegativeReals, NegativeReals, NegativeIntegers,
-                           PositiveReals, PositiveIntegers, NonPositiveIntegers,
-                           NonPositiveReals, TransformationFactory, SolverFactory,
-                           sum_product)
+from pyomo.environ import (
+    AbstractModel,
+    Set,
+    RangeSet,
+    Objective,
+    Constraint,
+    Var,
+    Block,
+    Integers,
+    Boolean,
+    Binary,
+    Reals,
+    RealSet,
+    NonNegativeIntegers,
+    NonNegativeReals,
+    NegativeReals,
+    NegativeIntegers,
+    PositiveReals,
+    PositiveIntegers,
+    NonPositiveIntegers,
+    NonPositiveReals,
+    TransformationFactory,
+    SolverFactory,
+    sum_product,
+)
 from pyomo.core.plugins.transform.standard_form import StandardForm
 from pyomo.core.plugins.transform.nonnegative_transform import NonNegativeTransformation
-
 
 solvers = check_available_solvers('glpk')
 
 
 class Test(unittest.TestCase):
-
     def setUp(self):
         self.model = AbstractModel()
 
@@ -42,8 +58,8 @@ class Test(unittest.TestCase):
         if os.path.exists("unknown.lp"):
             os.unlink("unknown.lp")
         TempfileManager.clear_tempfiles()
-        if os.path.exists(os.path.join(currdir,'result.yml')):
-            os.remove(os.path.join(currdir,'result.yml'))
+        if os.path.exists(os.path.join(currdir, 'result.yml')):
+            os.remove(os.path.join(currdir, 'result.yml'))
         self.model = None
 
     @staticmethod
@@ -62,14 +78,14 @@ class Test(unittest.TestCase):
 
     def test_fix_discrete(self):
         # Coverage of the _clear_attribute method
-        self.model.A = RangeSet(1,4)
+        self.model.A = RangeSet(1, 4)
         self.model.a = Var()
         self.model.b = Var(within=self.model.A)
         self.model.c = Var(within=NonNegativeIntegers)
-        self.model.d = Var(within=Integers, bounds=(-2,3))
+        self.model.d = Var(within=Integers, bounds=(-2, 3))
         self.model.e = Var(within=Boolean)
         self.model.f = Var(domain=Boolean)
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         xfrm = TransformationFactory('core.fix_discrete')
         rinst = xfrm.create_using(instance)
         self.assertFalse(rinst.a.is_fixed())
@@ -81,14 +97,14 @@ class Test(unittest.TestCase):
 
     def test_fix_discrete_clone(self):
         # Coverage of the _clear_attribute method
-        self.model.A = RangeSet(1,4)
+        self.model.A = RangeSet(1, 4)
         self.model.a = Var()
         self.model.b = Var(within=self.model.A)
         self.model.c = Var(within=NonNegativeIntegers)
-        self.model.d = Var(within=Integers, bounds=(-2,3))
+        self.model.d = Var(within=Integers, bounds=(-2, 3))
         self.model.e = Var(within=Boolean)
         self.model.f = Var(domain=Boolean)
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         instance_clone = instance.clone()
         xfrm = TransformationFactory('core.fix_discrete')
         rinst = xfrm.create_using(instance_clone)
@@ -101,14 +117,14 @@ class Test(unittest.TestCase):
 
     def test_relax_integrality1(self):
         # Coverage of the _clear_attribute method
-        self.model.A = RangeSet(1,4)
+        self.model.A = RangeSet(1, 4)
         self.model.a = Var()
         self.model.b = Var(within=self.model.A)
         self.model.c = Var(within=NonNegativeIntegers)
-        self.model.d = Var(within=Integers, bounds=(-2,3))
+        self.model.d = Var(within=Integers, bounds=(-2, 3))
         self.model.e = Var(within=Boolean)
         self.model.f = Var(domain=Boolean)
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         xfrm = TransformationFactory('core.relax_integer_vars')
         rinst = xfrm.create_using(instance)
         self.assertEqual(type(rinst.a.domain), RealSet)
@@ -126,14 +142,14 @@ class Test(unittest.TestCase):
 
     def test_relax_integrality2(self):
         # Coverage of the _clear_attribute method
-        self.model.A = RangeSet(1,4)
-        self.model.a = Var([1,2,3], dense=True)
-        self.model.b = Var([1,2,3], within=self.model.A, dense=True)
-        self.model.c = Var([1,2,3], within=NonNegativeIntegers, dense=True)
-        self.model.d = Var([1,2,3], within=Integers, bounds=(-2,3), dense=True)
-        self.model.e = Var([1,2,3], within=Boolean, dense=True)
-        self.model.f = Var([1,2,3], domain=Boolean, dense=True)
-        instance=self.model.create_instance()
+        self.model.A = RangeSet(1, 4)
+        self.model.a = Var([1, 2, 3], dense=True)
+        self.model.b = Var([1, 2, 3], within=self.model.A, dense=True)
+        self.model.c = Var([1, 2, 3], within=NonNegativeIntegers, dense=True)
+        self.model.d = Var([1, 2, 3], within=Integers, bounds=(-2, 3), dense=True)
+        self.model.e = Var([1, 2, 3], within=Boolean, dense=True)
+        self.model.f = Var([1, 2, 3], domain=Boolean, dense=True)
+        instance = self.model.create_instance()
         xfrm = TransformationFactory('core.relax_integer_vars')
         rinst = xfrm.create_using(instance)
         self.assertEqual(type(rinst.a[1].domain), RealSet)
@@ -151,14 +167,14 @@ class Test(unittest.TestCase):
 
     def test_relax_integrality_cloned(self):
         # Coverage of the _clear_attribute method
-        self.model.A = RangeSet(1,4)
+        self.model.A = RangeSet(1, 4)
         self.model.a = Var()
         self.model.b = Var(within=self.model.A)
         self.model.c = Var(within=NonNegativeIntegers)
-        self.model.d = Var(within=Integers, bounds=(-2,3))
+        self.model.d = Var(within=Integers, bounds=(-2, 3))
         self.model.e = Var(within=Boolean)
         self.model.f = Var(domain=Boolean)
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         instance_cloned = instance.clone()
         xfrm = TransformationFactory('core.relax_integer_vars')
         rinst = xfrm.create_using(instance_cloned)
@@ -177,24 +193,24 @@ class Test(unittest.TestCase):
 
     def test_relax_integrality(self):
         # Coverage of the _clear_attribute method
-        self.model.d = Var(within=Integers, bounds=(-2,3))
-        instance=self.model.create_instance()
+        self.model.d = Var(within=Integers, bounds=(-2, 3))
+        instance = self.model.create_instance()
         instance_cloned = instance.clone()
         xfrm = TransformationFactory('core.relax_integer_vars')
         rinst = xfrm.create_using(instance_cloned)
         self.assertEqual(type(rinst.d.domain), RealSet)
-        self.assertEqual(rinst.d.bounds, (-2,3))
+        self.assertEqual(rinst.d.bounds, (-2, 3))
         self.assertIs(instance.d.domain, Integers)
         self.assertIs(instance_cloned.d.domain, Integers)
 
     def test_relax_integrality_simple_cloned(self):
-        self.model.x = Var(within=Integers, bounds=(-2,3))
+        self.model.x = Var(within=Integers, bounds=(-2, 3))
         instance = self.model.create_instance()
         instance_cloned = instance.clone()
         xfrm = TransformationFactory('core.relax_discrete')
         rinst = xfrm.create_using(instance_cloned)
         self.assertIs(rinst.x.domain, Reals)
-        self.assertEqual(rinst.x.bounds, (-2,3))
+        self.assertEqual(rinst.x.bounds, (-2, 3))
         self.assertIs(instance.x.domain, Integers)
         self.assertIs(instance_cloned.x.domain, Integers)
 
@@ -202,7 +218,7 @@ class Test(unittest.TestCase):
         self.model.x = Var(domain=NonNegativeIntegers)
         self.model.b = Block()
         self.model.b.x = Var(domain=Binary)
-        self.model.b.y = Var(domain=Integers, bounds=(-3,2))
+        self.model.b.y = Var(domain=Integers, bounds=(-3, 2))
         instance = self.model.create_instance()
         instance.b.deactivate()
         relax_integrality = TransformationFactory('core.relax_integer_vars')
@@ -221,7 +237,7 @@ class Test(unittest.TestCase):
         self.model.x = Var(domain=NonNegativeIntegers)
         self.model.b = Block()
         self.model.b.x = Var(domain=Binary)
-        self.model.b.y = Var(domain=Integers, bounds=(-3,2))
+        self.model.b.y = Var(domain=Integers, bounds=(-3, 2))
         instance = self.model.create_instance()
         instance.b.deactivate()
         relax_integrality = TransformationFactory('core.relax_integer_vars')
@@ -235,11 +251,11 @@ class Test(unittest.TestCase):
     def test_nonnegativity_transformation_1(self):
         self.model.a = Var()
         self.model.b = Var(within=NonNegativeIntegers)
-        self.model.c = Var(within=Integers, bounds=(-2,3))
+        self.model.c = Var(within=Integers, bounds=(-2, 3))
         self.model.d = Var(within=Boolean)
         self.model.e = Var(domain=Boolean)
 
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         xfrm = TransformationFactory('core.nonnegative_vars')
         transformed = xfrm.create_using(instance)
 
@@ -263,7 +279,7 @@ class Test(unittest.TestCase):
             self.assertIs(transformed.e[ndx].domain, Binary)
 
     def test_nonnegativity_transformation_2(self):
-        self.model.S = RangeSet(0,10)
+        self.model.S = RangeSet(0, 10)
         self.model.T = Set(initialize=["foo", "bar"])
 
         # Unindexed, singly indexed, and doubly indexed variables with
@@ -276,16 +292,16 @@ class Test(unittest.TestCase):
         # rule-defined bounds
         def boundsRule(*args):
             return (-4, 4)
+
         self.model.x2 = Var(bounds=boundsRule)
         self.model.y2 = Var(self.model.S, bounds=boundsRule)
         self.model.z2 = Var(self.model.S, self.model.T, bounds=boundsRule)
 
-
         # Unindexed, singly indexed, and doubly indexed variables with
         # explicit domains
         self.model.x3 = Var(domain=NegativeReals)
-        self.model.y3 = Var(self.model.S, domain = NegativeIntegers)
-        self.model.z3 = Var(self.model.S, self.model.T, domain = Reals)
+        self.model.y3 = Var(self.model.S, domain=NegativeIntegers)
+        self.model.z3 = Var(self.model.S, self.model.T, domain=Reals)
 
         # Unindexed, singly indexed, and doubly indexed variables with
         # rule-defined domains
@@ -326,14 +342,14 @@ class Test(unittest.TestCase):
         # Make sure everything is nonnegative
         for c in ('x', 'y', 'z'):
             for n in ('1', '2', '3', '4'):
-                var = transformed.__getattribute__(c+n)
-                for ndx in var._index:
+                var = transformed.__getattribute__(c + n)
+                for ndx in var.index_set():
                     self.assertTrue(self.nonnegativeBounds(var[ndx]))
 
     @unittest.skipIf(not 'glpk' in solvers, "glpk solver is not available")
     @unittest.expectedFailure
     def test_nonnegative_transform_3(self):
-        self.model.S = RangeSet(0,10)
+        self.model.S = RangeSet(0, 10)
         self.model.T = Set(initialize=["foo", "bar"])
 
         # Unindexed, singly indexed, and doubly indexed variables with
@@ -346,16 +362,16 @@ class Test(unittest.TestCase):
         # rule-defined bounds
         def boundsRule(*args):
             return (-4, 4)
+
         self.model.x2 = Var(bounds=boundsRule)
         self.model.y2 = Var(self.model.S, bounds=boundsRule)
         self.model.z2 = Var(self.model.S, self.model.T, bounds=boundsRule)
 
-
         # Unindexed, singly indexed, and doubly indexed variables with
         # explicit domains
         self.model.x3 = Var(domain=NegativeReals, bounds=(-10, 10))
-        self.model.y3 = Var(self.model.S, domain = NegativeIntegers, bounds=(-10, 10))
-        self.model.z3 = Var(self.model.S, self.model.T, domain = Reals, bounds=(-10, 10))
+        self.model.y3 = Var(self.model.S, domain=NegativeIntegers, bounds=(-10, 10))
+        self.model.z3 = Var(self.model.S, self.model.T, domain=Reals, bounds=(-10, 10))
 
         # Unindexed, singly indexed, and doubly indexed variables with
         # rule-defined domains
@@ -392,16 +408,21 @@ class Test(unittest.TestCase):
 
         self.model.x4 = Var(domain=domainRule, bounds=(-10, 10))
         self.model.y4 = Var(self.model.S, domain=domainRule, bounds=(-10, 10))
-        self.model.z4 = Var(self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10))
+        self.model.z4 = Var(
+            self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10)
+        )
 
         def objRule(model):
-            return sum(5*sum_product(model.__getattribute__(c+n)) \
-                       for c in ('x', 'y', 'z') for n in ('1', '2', '3', '4'))
+            return sum(
+                5 * sum_product(model.__getattribute__(c + n))
+                for c in ('x', 'y', 'z')
+                for n in ('1', '2', '3', '4')
+            )
 
         self.model.obj = Objective(rule=objRule)
 
         transform = TransformationFactory('core.nonnegative_vars')
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         transformed = transform.create_using(instance)
 
         opt = SolverFactory("glpk")
@@ -411,14 +432,14 @@ class Test(unittest.TestCase):
 
         self.assertEqual(
             instance_sol["Solution"][0]["Objective"]['obj']["value"],
-            transformed_sol["Solution"][0]["Objective"]['obj']["value"]
-            )
+            transformed_sol["Solution"][0]["Objective"]['obj']["value"],
+        )
 
     @unittest.skipIf(not 'glpk' in solvers, "glpk solver is not available")
     @unittest.expectedFailure
     def test_nonnegative_transform_4(self):
-        """ Same as #3, but adds constraints """
-        self.model.S = RangeSet(0,10)
+        """Same as #3, but adds constraints"""
+        self.model.S = RangeSet(0, 10)
         self.model.T = Set(initialize=["foo", "bar"])
 
         # Unindexed, singly indexed, and doubly indexed variables with
@@ -431,16 +452,16 @@ class Test(unittest.TestCase):
         # rule-defined bounds
         def boundsRule(*args):
             return (-4, 4)
+
         self.model.x2 = Var(bounds=boundsRule)
         self.model.y2 = Var(self.model.S, bounds=boundsRule)
         self.model.z2 = Var(self.model.S, self.model.T, bounds=boundsRule)
 
-
         # Unindexed, singly indexed, and doubly indexed variables with
         # explicit domains
         self.model.x3 = Var(domain=NegativeReals, bounds=(-10, 10))
-        self.model.y3 = Var(self.model.S, domain = NegativeIntegers, bounds=(-10, 10))
-        self.model.z3 = Var(self.model.S, self.model.T, domain = Reals, bounds=(-10, 10))
+        self.model.y3 = Var(self.model.S, domain=NegativeIntegers, bounds=(-10, 10))
+        self.model.z3 = Var(self.model.S, self.model.T, domain=Reals, bounds=(-10, 10))
 
         # Unindexed, singly indexed, and doubly indexed variables with
         # rule-defined domains
@@ -477,7 +498,9 @@ class Test(unittest.TestCase):
 
         self.model.x4 = Var(domain=domainRule, bounds=(-10, 10))
         self.model.y4 = Var(self.model.S, domain=domainRule, bounds=(-10, 10))
-        self.model.z4 = Var(self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10))
+        self.model.z4 = Var(
+            self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10)
+        )
 
         # Add some constraints
         def makeXConRule(var):
@@ -495,30 +518,30 @@ class Test(unittest.TestCase):
         for n in ('1', '2', '3', '4'):
             self.model.__setattr__(
                 "x" + n + "_constraint",
-                Constraint(
-                rule=makeXConRule(
-                self.model.__getattribute__("x"+n))))
+                Constraint(rule=makeXConRule(self.model.__getattribute__("x" + n))),
+            )
 
             self.model.__setattr__(
                 "y" + n + "_constraint",
-                Constraint(
-                rule=makeYConRule(
-                self.model.__getattribute__("y"+n))))
+                Constraint(rule=makeYConRule(self.model.__getattribute__("y" + n))),
+            )
 
             self.model.__setattr__(
                 "z" + n + "_constraint",
-                Constraint(
-                rule=makeZConRule(
-                self.model.__getattribute__("z"+n))))
+                Constraint(rule=makeZConRule(self.model.__getattribute__("z" + n))),
+            )
 
         def objRule(model):
-            return sum(5*sum_product(model.__getattribute__(c+n)) \
-                       for c in ('x', 'y', 'z') for n in ('1', '2', '3', '4'))
+            return sum(
+                5 * sum_product(model.__getattribute__(c + n))
+                for c in ('x', 'y', 'z')
+                for n in ('1', '2', '3', '4')
+            )
 
         self.model.obj = Objective(rule=objRule)
 
         transform = NonNegativeTransformation()
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         transformed = transform(instance)
 
         opt = SolverFactory("glpk")
@@ -528,14 +551,13 @@ class Test(unittest.TestCase):
 
         self.assertEqual(
             instance_sol["Solution"][0]["Objective"]['obj']["value"],
-            transformed_sol["Solution"][0]["Objective"]['obj']["value"]
-            )
+            transformed_sol["Solution"][0]["Objective"]['obj']["value"],
+        )
 
-    @unittest.category('nightly')
     @unittest.skipIf(not 'glpk' in solvers, "glpk solver is not available")
     @unittest.expectedFailure
     def test_standard_form_transform_1(self):
-        self.model.S = RangeSet(0,10)
+        self.model.S = RangeSet(0, 10)
         self.model.T = Set(initialize=["foo", "bar"])
 
         # Unindexed, singly indexed, and doubly indexed variables with
@@ -548,16 +570,16 @@ class Test(unittest.TestCase):
         # rule-defined bounds
         def boundsRule(*args):
             return (-4, 4)
+
         self.model.x2 = Var(bounds=boundsRule)
         self.model.y2 = Var(self.model.S, bounds=boundsRule)
         self.model.z2 = Var(self.model.S, self.model.T, bounds=boundsRule)
 
-
         # Unindexed, singly indexed, and doubly indexed variables with
         # explicit domains
         self.model.x3 = Var(domain=NegativeReals, bounds=(-10, 10))
-        self.model.y3 = Var(self.model.S, domain = NegativeIntegers, bounds=(-10, 10))
-        self.model.z3 = Var(self.model.S, self.model.T, domain = Reals, bounds=(-10, 10))
+        self.model.y3 = Var(self.model.S, domain=NegativeIntegers, bounds=(-10, 10))
+        self.model.z3 = Var(self.model.S, self.model.T, domain=Reals, bounds=(-10, 10))
 
         # Unindexed, singly indexed, and doubly indexed variables with
         # rule-defined domains
@@ -594,16 +616,21 @@ class Test(unittest.TestCase):
 
         self.model.x4 = Var(domain=domainRule, bounds=(-10, 10))
         self.model.y4 = Var(self.model.S, domain=domainRule, bounds=(-10, 10))
-        self.model.z4 = Var(self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10))
+        self.model.z4 = Var(
+            self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10)
+        )
 
         def objRule(model):
-            return sum(5*sum_product(model.__getattribute__(c+n)) \
-                       for c in ('x', 'y', 'z') for n in ('1', '2', '3', '4'))
+            return sum(
+                5 * sum_product(model.__getattribute__(c + n))
+                for c in ('x', 'y', 'z')
+                for n in ('1', '2', '3', '4')
+            )
 
         self.model.obj = Objective(rule=objRule)
 
         transform = StandardForm()
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         transformed = transform(instance)
 
         opt = SolverFactory("glpk")
@@ -613,15 +640,14 @@ class Test(unittest.TestCase):
 
         self.assertEqual(
             instance_sol["Solution"][0]["Objective"]['obj']["value"],
-            transformed_sol["Solution"][0]["Objective"]['obj']["value"]
-            )
+            transformed_sol["Solution"][0]["Objective"]['obj']["value"],
+        )
 
-    @unittest.category('nightly')
     @unittest.skipIf(not 'glpk' in solvers, "glpk solver is not available")
     @unittest.expectedFailure
     def test_standard_form_transform_2(self):
-        """ Same as #1, but adds constraints """
-        self.model.S = RangeSet(0,10)
+        """Same as #1, but adds constraints"""
+        self.model.S = RangeSet(0, 10)
         self.model.T = Set(initialize=["foo", "bar"])
 
         # Unindexed, singly indexed, and doubly indexed variables with
@@ -634,16 +660,16 @@ class Test(unittest.TestCase):
         # rule-defined bounds
         def boundsRule(*args):
             return (-4, 4)
+
         self.model.x2 = Var(bounds=boundsRule)
         self.model.y2 = Var(self.model.S, bounds=boundsRule)
         self.model.z2 = Var(self.model.S, self.model.T, bounds=boundsRule)
 
-
         # Unindexed, singly indexed, and doubly indexed variables with
         # explicit domains
         self.model.x3 = Var(domain=NegativeReals, bounds=(-10, 10))
-        self.model.y3 = Var(self.model.S, domain = NegativeIntegers, bounds=(-10, 10))
-        self.model.z3 = Var(self.model.S, self.model.T, domain = Reals, bounds=(-10, 10))
+        self.model.y3 = Var(self.model.S, domain=NegativeIntegers, bounds=(-10, 10))
+        self.model.z3 = Var(self.model.S, self.model.T, domain=Reals, bounds=(-10, 10))
 
         # Unindexed, singly indexed, and doubly indexed variables with
         # rule-defined domains
@@ -680,7 +706,9 @@ class Test(unittest.TestCase):
 
         self.model.x4 = Var(domain=domainRule, bounds=(-10, 10))
         self.model.y4 = Var(self.model.S, domain=domainRule, bounds=(-10, 10))
-        self.model.z4 = Var(self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10))
+        self.model.z4 = Var(
+            self.model.S, self.model.T, domain=domainRule, bounds=(-10, 10)
+        )
 
         # Add some constraints
         def makeXConRule(var):
@@ -698,30 +726,30 @@ class Test(unittest.TestCase):
         for n in ('1', '2', '3', '4'):
             self.model.__setattr__(
                 "x" + n + "_constraint",
-                Constraint(
-                rule=makeXConRule(
-                self.model.__getattribute__("x"+n))))
+                Constraint(rule=makeXConRule(self.model.__getattribute__("x" + n))),
+            )
 
             self.model.__setattr__(
                 "y" + n + "_constraint",
-                Constraint(
-                rule=makeYConRule(
-                self.model.__getattribute__("y"+n))))
+                Constraint(rule=makeYConRule(self.model.__getattribute__("y" + n))),
+            )
 
             self.model.__setattr__(
                 "z" + n + "_constraint",
-                Constraint(
-                rule=makeZConRule(
-                self.model.__getattribute__("z"+n))))
+                Constraint(rule=makeZConRule(self.model.__getattribute__("z" + n))),
+            )
 
         def objRule(model):
-            return sum(5*sum_product(model.__getattribute__(c+n)) \
-                       for c in ('x', 'y', 'z') for n in ('1', '2', '3', '4'))
+            return sum(
+                5 * sum_product(model.__getattribute__(c + n))
+                for c in ('x', 'y', 'z')
+                for n in ('1', '2', '3', '4')
+            )
 
         self.model.obj = Objective(rule=objRule)
 
         transform = StandardForm()
-        instance=self.model.create_instance()
+        instance = self.model.create_instance()
         transformed = transform(instance)
 
         opt = SolverFactory("glpk")
@@ -731,8 +759,8 @@ class Test(unittest.TestCase):
 
         self.assertEqual(
             instance_sol["Solution"][0]["Objective"]['obj']["value"],
-            transformed_sol["Solution"][0]["Objective"]['obj']["value"]
-            )
+            transformed_sol["Solution"][0]["Objective"]['obj']["value"],
+        )
 
 
 if __name__ == "__main__":

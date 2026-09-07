@@ -1,21 +1,17 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 """
 This module contains transformations for representing a
 multi-variate piecewise linear function using a
-mixed-interger problem formulation. Reference::
+mixed-integer problem formulation (see [VAN10]_).
 
-  Mixed-Integer Models for Non-separable Piecewise Linear \
-Optimization: Unifying framework and Extensions (Vielma, \
-Nemhauser 2008)
 """
 
 from collections.abc import Sized
@@ -23,26 +19,21 @@ import logging
 
 from pyomo.core.kernel.block import block
 from pyomo.core.kernel.set_types import IntegerSet
-from pyomo.core.kernel.variable import (variable,
-                                        variable_dict,
-                                        variable_tuple)
-from pyomo.core.kernel.constraint import (linear_constraint,
-                                          constraint_list,
-                                          constraint_tuple)
-from pyomo.core.kernel.expression import (expression,
-                                          expression_tuple)
+from pyomo.core.kernel.variable import variable, variable_dict, variable_tuple
+from pyomo.core.kernel.constraint import (
+    linear_constraint,
+    constraint_list,
+    constraint_tuple,
+)
+from pyomo.core.kernel.expression import expression, expression_tuple
 import pyomo.core.kernel.piecewise_library.util
 
 logger = logging.getLogger('pyomo.core')
 
 registered_transforms = {}
 
-def piecewise_nd(tri,
-                 values,
-                 input=None,
-                 output=None,
-                 bound='eq',
-                 repn='cc'):
+
+def piecewise_nd(tri, values, input=None, output=None, bound='eq', repn='cc'):
     """
     Models a multi-variate piecewise linear function.
 
@@ -88,9 +79,9 @@ def piecewise_nd(tri,
                 - 'cc': convex combination
 
     Returns:
-        TransformedPiecewiseLinearFunctionND: a block \
-            containing any new variables, constraints, and \
-            other components used by the piecewise \
+        TransformedPiecewiseLinearFunctionND: a block
+            containing any new variables, constraints, and
+            other components used by the piecewise
             representation
     """
     transform = None
@@ -99,20 +90,16 @@ def piecewise_nd(tri,
     except KeyError:
         raise ValueError(
             "Keyword assignment repn='%s' is not valid. "
-            "Must be one of: %s"
-            % (repn,
-               str(sorted(registered_transforms.keys()))))
+            "Must be one of: %s" % (repn, str(sorted(registered_transforms.keys())))
+        )
     assert transform is not None
 
-    func = PiecewiseLinearFunctionND(tri,
-                                     values)
+    func = PiecewiseLinearFunctionND(tri, values)
 
-    return transform(func,
-                     input=input,
-                     output=output,
-                     bound=bound)
+    return transform(func, input=input, output=output, bound=bound)
 
-class PiecewiseLinearFunctionND(object):
+
+class PiecewiseLinearFunctionND:
     """A multi-variate piecewise linear function
 
     Multi-varite piecewise linear functions are defined by a
@@ -139,21 +126,18 @@ class PiecewiseLinearFunctionND(object):
             the values of the piecewise function at each of
             coordinates in the triangulation points array.
     """
+
     __slots__ = ("_tri", "_values")
 
-    def __init__(self,
-                 tri,
-                 values,
-                 validate=True,
-                 **kwds):
+    def __init__(self, tri, values, validate=True, **kwds):
         assert pyomo.core.kernel.piecewise_library.util.numpy_available
         assert pyomo.core.kernel.piecewise_library.util.scipy_available
-        assert isinstance(tri,
-                          pyomo.core.kernel.piecewise_library.\
-                          util.scipy.spatial.Delaunay)
-        assert isinstance(values,
-                          pyomo.core.kernel.piecewise_library.\
-                          util.numpy.ndarray)
+        assert isinstance(
+            tri, pyomo.core.kernel.piecewise_library.util.scipy.spatial.Delaunay
+        )
+        assert isinstance(
+            values, pyomo.core.kernel.piecewise_library.util.numpy.ndarray
+        )
         npoints, ndim = tri.points.shape
         nsimplices, _ = tri.simplices.shape
         assert tri.simplices.shape[1] == ndim + 1
@@ -166,7 +150,7 @@ class PiecewiseLinearFunctionND(object):
     def __getstate__(self):
         """Required for older versions of the pickle
         protocol since this class uses __slots__"""
-        return {key:getattr(self, key) for key in self.__slots__}
+        return {key: getattr(self, key) for key in self.__slots__}
 
     def __setstate__(self, state):
         """Required for older versions of the pickle
@@ -200,12 +184,13 @@ class PiecewiseLinearFunctionND(object):
         a (n,D)-shaped numpy array.
         """
         assert isinstance(x, Sized)
-        if isinstance(x, pyomo.core.kernel.piecewise_library.\
-                      util.numpy.ndarray):
+        if isinstance(x, pyomo.core.kernel.piecewise_library.util.numpy.ndarray):
             if x.shape != self._tri.points.shape[1:]:
                 multi = True
-                assert x.shape[1:] == self._tri.points[0].shape, \
-                    "%s[1] != %s" % (x.shape, self._tri.points[0].shape)
+                assert x.shape[1:] == self._tri.points[0].shape, "%s[1] != %s" % (
+                    x.shape,
+                    self._tri.points[0].shape,
+                )
             else:
                 multi = False
         else:
@@ -213,21 +198,23 @@ class PiecewiseLinearFunctionND(object):
         _, ndim = self._tri.points.shape
         i = self._tri.find_simplex(x)
         if multi:
-            Tinv = self._tri.transform[i,:ndim]
-            r = self._tri.transform[i,ndim]
-            b = pyomo.core.kernel.piecewise_library.util.\
-                numpy.einsum('ijk,ik->ij', Tinv, x-r)
-            b = pyomo.core.kernel.piecewise_library.util.\
-                numpy.c_[b, 1 - b.sum(axis=1)]
+            Tinv = self._tri.transform[i, :ndim]
+            r = self._tri.transform[i, ndim]
+            b = pyomo.core.kernel.piecewise_library.util.numpy.einsum(
+                'ijk,ik->ij', Tinv, x - r
+            )
+            b = pyomo.core.kernel.piecewise_library.util.numpy.c_[b, 1 - b.sum(axis=1)]
             s = self._tri.simplices[i]
-            return (b*self._values[s]).sum(axis=1)
+            return (b * self._values[s]).sum(axis=1)
         else:
-            b = self._tri.transform[i,:ndim,:ndim].dot(
-                x - self._tri.transform[i,ndim,:])
+            b = self._tri.transform[i, :ndim, :ndim].dot(
+                x - self._tri.transform[i, ndim, :]
+            )
             s = self._tri.simplices[i]
             val = b.dot(self._values[s[:ndim]])
-            val += (1-b.sum())*self._values[s[ndim]]
+            val += (1 - b.sum()) * self._values[s[ndim]]
             return val
+
 
 class TransformedPiecewiseLinearFunctionND(block):
     """Base class for transformed multi-variate piecewise
@@ -254,24 +241,19 @@ class TransformedPiecewiseLinearFunctionND(block):
               - 'ub': y >= f(x)
     """
 
-    def __init__(self,
-                 f,
-                 input=None,
-                 output=None,
-                 bound='eq'):
+    def __init__(self, f, input=None, output=None, bound='eq'):
         super(TransformedPiecewiseLinearFunctionND, self).__init__()
         assert isinstance(f, PiecewiseLinearFunctionND)
         if bound not in ('lb', 'ub', 'eq'):
-            raise ValueError("Invalid bound type %r. Must be "
-                             "one of: ['lb','ub','eq']"
-                             % (bound))
+            raise ValueError(
+                "Invalid bound type %r. Must be one of: ['lb','ub','eq']" % (bound)
+            )
         self._bound = bound
         self._f = f
-        _,ndim = f._tri.points.shape
+        _, ndim = f._tri.points.shape
         if input is None:
-            input = [None]*ndim
-        self._input = expression_tuple(
-            expression(input[i]) for i in range(ndim))
+            input = [None] * ndim
+        self._input = expression_tuple(expression(input[i]) for i in range(ndim))
         self._output = expression(output)
 
     @property
@@ -323,6 +305,7 @@ class TransformedPiecewiseLinearFunctionND(block):
         """
         return self._f(x)
 
+
 class piecewise_nd_cc(TransformedPiecewiseLinearFunctionND):
     """Discrete CC multi-variate piecewise representation
 
@@ -345,10 +328,10 @@ class piecewise_nd_cc(TransformedPiecewiseLinearFunctionND):
 
         # create vars
         self.v = variable_dict()
-        lmbda = self.v['lambda'] = variable_tuple(
-            variable(lb=0) for v in vertices)
+        lmbda = self.v['lambda'] = variable_tuple(variable(lb=0) for v in vertices)
         y = self.v['y'] = variable_tuple(
-            variable(domain_type=IntegerSet, lb=0, ub=1) for s in simplices)
+            variable(domain_type=IntegerSet, lb=0, ub=1) for s in simplices
+        )
         lmbda_tuple = tuple(lmbda)
 
         # create constraints
@@ -356,16 +339,22 @@ class piecewise_nd_cc(TransformedPiecewiseLinearFunctionND):
 
         clist = []
         for d in dimensions:
-            clist.append(linear_constraint(
-                variables=lmbda_tuple + (self.input[d],),
-                coefficients=tuple(pointsT[d]) + (-1,),
-                rhs=0))
+            clist.append(
+                linear_constraint(
+                    variables=lmbda_tuple + (self.input[d],),
+                    coefficients=tuple(pointsT[d]) + (-1,),
+                    rhs=0,
+                )
+            )
         self.c.append(constraint_tuple(clist))
         del clist
 
-        self.c.append(linear_constraint(
-            variables=lmbda_tuple + (self.output,),
-            coefficients=tuple(self.values) + (-1,)))
+        self.c.append(
+            linear_constraint(
+                variables=lmbda_tuple + (self.output,),
+                coefficients=tuple(self.values) + (-1,),
+            )
+        )
         if self.bound == 'ub':
             self.c[-1].lb = 0
         elif self.bound == 'lb':
@@ -374,10 +363,11 @@ class piecewise_nd_cc(TransformedPiecewiseLinearFunctionND):
             assert self.bound == 'eq'
             self.c[-1].rhs = 0
 
-        self.c.append(linear_constraint(
-            variables=lmbda_tuple,
-            coefficients=(1,)*len(lmbda_tuple),
-            rhs=1))
+        self.c.append(
+            linear_constraint(
+                variables=lmbda_tuple, coefficients=(1,) * len(lmbda_tuple), rhs=1
+            )
+        )
 
         # generate a map from vertex index to simplex index,
         # which avoids an n^2 lookup when generating the
@@ -390,16 +380,17 @@ class piecewise_nd_cc(TransformedPiecewiseLinearFunctionND):
         clist = []
         for v in vertices:
             variables = tuple(y[s] for s in vertex_to_simplex[v])
-            clist.append(linear_constraint(
-                variables=variables + (lmbda[v],),
-                coefficients=(1,)*len(variables) + (-1,),
-                lb=0))
+            clist.append(
+                linear_constraint(
+                    variables=variables + (lmbda[v],),
+                    coefficients=(1,) * len(variables) + (-1,),
+                    lb=0,
+                )
+            )
         self.c.append(constraint_tuple(clist))
         del clist
 
-        self.c.append(linear_constraint(
-            variables=y,
-            coefficients=(1,)*len(y),
-            rhs=1))
+        self.c.append(linear_constraint(variables=y, coefficients=(1,) * len(y), rhs=1))
+
 
 registered_transforms['cc'] = piecewise_nd_cc

@@ -1,36 +1,66 @@
+# ____________________________________________________________________________________
+#
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
+
 import abc
 import enum
-from typing import Sequence, Dict, Optional, Mapping, NoReturn, List, Tuple
-from pyomo.core.base.constraint import _GeneralConstraintData, Constraint
-from pyomo.core.base.sos import _SOSConstraintData, SOSConstraint
-from pyomo.core.base.var import _GeneralVarData, Var
-from pyomo.core.base.param import _ParamData, Param
-from pyomo.core.base.block import _BlockData, Block
-from pyomo.core.base.objective import _GeneralObjectiveData
-from pyomo.common.collections import ComponentMap, ComponentSet, OrderedSet
-from collections import OrderedDict
-from .utils.get_objective import get_objective
-from .utils.identify_named_expressions import identify_named_expressions
-from pyomo.common.timing import HierarchicalTimer
+import os
+import re
+import weakref
+
+from typing import (
+    TYPE_CHECKING,
+    Sequence,
+    Dict,
+    Optional,
+    Mapping,
+    NoReturn,
+    List,
+    Tuple,
+    MutableMapping,
+)
+
 from pyomo.common.config import ConfigDict, ConfigValue, NonNegativeFloat
 from pyomo.common.errors import ApplicationError
-from pyomo.opt.base import SolverFactory as LegacySolverFactory
+from pyomo.common.enums import IntEnum, SolverAPIVersion
 from pyomo.common.factory import Factory
-import logging
-import os
+from pyomo.common.timing import HierarchicalTimer
+from pyomo.core.base.constraint import ConstraintData, Constraint
+from pyomo.core.base.sos import SOSConstraintData, SOSConstraint
+from pyomo.core.base.var import VarData, Var
+from pyomo.core.base.param import ParamData, Param
+from pyomo.core.base.block import BlockData, Block
+from pyomo.core.base.objective import ObjectiveData
+from pyomo.common.collections import ComponentMap
+from .utils.get_objective import get_objective
+from .utils.collect_vars_and_named_exprs import collect_vars_and_named_exprs
+from pyomo.opt.base import SolverFactory as LegacySolverFactory
 from pyomo.opt.results.results_ import SolverResults as LegacySolverResults
-from pyomo.opt.results.solution import Solution as LegacySolution, SolutionStatus as LegacySolutionStatus
-from pyomo.opt.results.solver import TerminationCondition as LegacyTerminationCondition, SolverStatus as LegacySolverStatus
-from pyomo.core.kernel.objective import minimize, maximize
+from pyomo.opt.results.solution import (
+    Solution as LegacySolution,
+    SolutionStatus as LegacySolutionStatus,
+)
+from pyomo.opt.results.solver import (
+    TerminationCondition as LegacyTerminationCondition,
+    SolverStatus as LegacySolverStatus,
+)
+from pyomo.core.kernel.objective import minimize
 from pyomo.core.base import SymbolMap
-import weakref
-from io import StringIO
+from .cmodel import cmodel, cmodel_available
+from pyomo.core.staleflag import StaleFlagManager
+from pyomo.core.expr.numvalue import NumericConstant
 
 
 class TerminationCondition(enum.Enum):
     """
     An enumeration for checking the termination condition of solvers
     """
+
     unknown = 0
     """unknown serves as both a default value, and it is used when no other enum member makes sense"""
 
@@ -70,6 +100,9 @@ class TerminationCondition(enum.Enum):
 
 class SolverConfig(ConfigDict):
     """
+    Common configuration options for all APPSI solver interfaces
+
+
     Attributes
     ----------
     time_limit: float
@@ -87,25 +120,32 @@ class SolverConfig(ConfigDict):
         If True, then some timing information will be printed at the
         end of the solve.
     """
-    def __init__(self,
-                 description=None,
-                 doc=None,
-                 implicit=False,
-                 implicit_domain=None,
-                 visibility=0):
-        super(SolverConfig, self).__init__(description=description,
-                                           doc=doc,
-                                           implicit=implicit,
-                                           implicit_domain=implicit_domain,
-                                           visibility=visibility)
+
+    def __init__(
+        self,
+        description=None,
+        doc=None,
+        implicit=False,
+        implicit_domain=None,
+        visibility=0,
+    ):
+        super(SolverConfig, self).__init__(
+            description=description,
+            doc=doc,
+            implicit=implicit,
+            implicit_domain=implicit_domain,
+            visibility=visibility,
+        )
 
         self.declare('time_limit', ConfigValue(domain=NonNegativeFloat))
+        self.declare('warmstart', ConfigValue(domain=bool))
         self.declare('stream_solver', ConfigValue(domain=bool))
         self.declare('load_solution', ConfigValue(domain=bool))
         self.declare('symbolic_solver_labels', ConfigValue(domain=bool))
         self.declare('report_timing', ConfigValue(domain=bool))
 
         self.time_limit: Optional[float] = None
+        self.warmstart: bool = False
         self.stream_solver: bool = False
         self.load_solution: bool = True
         self.symbolic_solver_labels: bool = False
@@ -114,6 +154,8 @@ class SolverConfig(ConfigDict):
 
 class MIPSolverConfig(SolverConfig):
     """
+    Configuration options common to all MIP solvers
+
     Attributes
     ----------
     mip_gap: float
@@ -122,17 +164,22 @@ class MIPSolverConfig(SolverConfig):
         If True, all integer variables will be relaxed to continuous
         variables before solving
     """
-    def __init__(self,
-                 description=None,
-                 doc=None,
-                 implicit=False,
-                 implicit_domain=None,
-                 visibility=0):
-        super(MIPSolverConfig, self).__init__(description=description,
-                                              doc=doc,
-                                              implicit=implicit,
-                                              implicit_domain=implicit_domain,
-                                              visibility=visibility)
+
+    def __init__(
+        self,
+        description=None,
+        doc=None,
+        implicit=False,
+        implicit_domain=None,
+        visibility=0,
+    ):
+        super(MIPSolverConfig, self).__init__(
+            description=description,
+            doc=doc,
+            implicit=implicit,
+            implicit_domain=implicit_domain,
+            visibility=visibility,
+        )
 
         self.declare('mip_gap', ConfigValue(domain=NonNegativeFloat))
         self.declare('relax_integrality', ConfigValue(domain=bool))
@@ -142,7 +189,7 @@ class MIPSolverConfig(SolverConfig):
 
 
 class SolutionLoaderBase(abc.ABC):
-    def load_vars(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> NoReturn:
+    def load_vars(self, vars_to_load: Optional[Sequence[VarData]] = None) -> NoReturn:
         """
         Load the solution of the primal variables into the value attribute of the variables.
 
@@ -154,17 +201,20 @@ class SolutionLoaderBase(abc.ABC):
         """
         for v, val in self.get_primals(vars_to_load=vars_to_load).items():
             v.set_value(val, skip_validation=True)
+        StaleFlagManager.mark_all_as_stale(delayed=True)
 
     @abc.abstractmethod
-    def get_primals(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> Mapping[_GeneralVarData, float]:
+    def get_primals(
+        self, vars_to_load: Optional[Sequence[VarData]] = None
+    ) -> Mapping[VarData, float]:
         """
         Returns a ComponentMap mapping variable to var value.
 
         Parameters
         ----------
         vars_to_load: list
-            A list of the variables whose solution value should be retreived. If vars_to_load is None,
-            then the values for all variables will be retreived.
+            A list of the variables whose solution value should be retrieved. If vars_to_load is None,
+            then the values for all variables will be retrieved.
 
         Returns
         -------
@@ -173,15 +223,17 @@ class SolutionLoaderBase(abc.ABC):
         """
         pass
 
-    def get_duals(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_duals(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
         """
         Returns a dictionary mapping constraint to dual value.
 
         Parameters
         ----------
         cons_to_load: list
-            A list of the constraints whose duals should be retreived. If cons_to_load is None, then the duals for all
-            constraints will be retreived.
+            A list of the constraints whose duals should be retrieved. If cons_to_load is None, then the duals for all
+            constraints will be retrieved.
 
         Returns
         -------
@@ -190,7 +242,9 @@ class SolutionLoaderBase(abc.ABC):
         """
         raise NotImplementedError(f'{type(self)} does not support the get_duals method')
 
-    def get_slacks(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_slacks(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
         """
         Returns a dictionary mapping constraint to slack.
 
@@ -205,16 +259,20 @@ class SolutionLoaderBase(abc.ABC):
         slacks: dict
             Maps constraints to slacks
         """
-        raise NotImplementedError(f'{type(self)} does not support the get_slacks method')
+        raise NotImplementedError(
+            f'{type(self)} does not support the get_slacks method'
+        )
 
-    def get_reduced_costs(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> Mapping[_GeneralVarData, float]:
+    def get_reduced_costs(
+        self, vars_to_load: Optional[Sequence[VarData]] = None
+    ) -> Mapping[VarData, float]:
         """
         Returns a ComponentMap mapping variable to reduced cost.
 
         Parameters
         ----------
         vars_to_load: list
-            A list of the variables whose reduced cost should be retreived. If vars_to_load is None, then the
+            A list of the variables whose reduced cost should be retrieved. If vars_to_load is None, then the
             reduced costs for all variables will be loaded.
 
         Returns
@@ -222,11 +280,19 @@ class SolutionLoaderBase(abc.ABC):
         reduced_costs: ComponentMap
             Maps variables to reduced costs
         """
-        raise NotImplementedError(f'{type(self)} does not support the get_reduced_costs method')
+        raise NotImplementedError(
+            f'{type(self)} does not support the get_reduced_costs method'
+        )
 
 
 class SolutionLoader(SolutionLoaderBase):
-    def __init__(self, primals, duals, slacks, reduced_costs):
+    def __init__(
+        self,
+        primals: Optional[MutableMapping],
+        duals: Optional[MutableMapping],
+        slacks: Optional[MutableMapping],
+        reduced_costs: Optional[MutableMapping],
+    ):
         """
         Parameters
         ----------
@@ -244,15 +310,31 @@ class SolutionLoader(SolutionLoaderBase):
         self._slacks = slacks
         self._reduced_costs = reduced_costs
 
-    def get_primals(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> Mapping[_GeneralVarData, float]:
+    def get_primals(
+        self, vars_to_load: Optional[Sequence[VarData]] = None
+    ) -> Mapping[VarData, float]:
+        if self._primals is None:
+            raise RuntimeError(
+                'Solution loader does not currently have a valid solution. Please '
+                'check the termination condition.'
+            )
         if vars_to_load is None:
             return ComponentMap(self._primals.values())
         else:
             primals = ComponentMap()
             for v in vars_to_load:
                 primals[v] = self._primals[id(v)][1]
+            return primals
 
-    def get_duals(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_duals(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
+        if self._duals is None:
+            raise RuntimeError(
+                'Solution loader does not currently have valid duals. Please '
+                'check the termination condition and ensure the solver returns duals '
+                'for the given problem type.'
+            )
         if cons_to_load is None:
             duals = dict(self._duals)
         else:
@@ -261,7 +343,15 @@ class SolutionLoader(SolutionLoaderBase):
                 duals[c] = self._duals[c]
         return duals
 
-    def get_slacks(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_slacks(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
+        if self._slacks is None:
+            raise RuntimeError(
+                'Solution loader does not currently have valid slacks. Please '
+                'check the termination condition and ensure the solver returns slacks '
+                'for the given problem type.'
+            )
         if cons_to_load is None:
             slacks = dict(self._slacks)
         else:
@@ -270,7 +360,15 @@ class SolutionLoader(SolutionLoaderBase):
                 slacks[c] = self._slacks[c]
         return slacks
 
-    def get_reduced_costs(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> Mapping[_GeneralVarData, float]:
+    def get_reduced_costs(
+        self, vars_to_load: Optional[Sequence[VarData]] = None
+    ) -> Mapping[VarData, float]:
+        if self._reduced_costs is None:
+            raise RuntimeError(
+                'Solution loader does not currently have valid reduced costs. Please '
+                'check the termination condition and ensure the solver returns reduced '
+                'costs for the given problem type.'
+            )
         if vars_to_load is None:
             rc = ComponentMap(self._reduced_costs.values())
         else:
@@ -280,8 +378,10 @@ class SolutionLoader(SolutionLoaderBase):
         return rc
 
 
-class Results(object):
+class Results:
     """
+    Base class for all APPSI solver results
+
     Attributes
     ----------
     termination_condition: TerminationCondition
@@ -297,13 +397,15 @@ class Results(object):
         For solvers that do not provide an objective bound, this should be -inf
         (minimization) or inf (maximization)
 
+    Example
+    -------
     Here is an example workflow:
 
-        >>> import pyomo.environ as pe
+        >>> import pyomo.environ as pyo
         >>> from pyomo.contrib import appsi
-        >>> m = pe.ConcreteModel()
-        >>> m.x = pe.Var()
-        >>> m.obj = pe.Objective(expr=m.x**2)
+        >>> m = pyo.ConcreteModel()
+        >>> m.x = pyo.Var()
+        >>> m.obj = pyo.Objective(expr=m.x**2)
         >>> opt = appsi.solvers.Ipopt()
         >>> opt.config.load_solution = False
         >>> results = opt.solve(m) #doctest:+SKIP
@@ -320,22 +422,27 @@ class Results(object):
         ... else: #doctest:+SKIP
         ...     print('The following termination condition was encountered: ', results.termination_condition) #doctest:+SKIP
     """
+
     def __init__(self):
-        self.solution_loader: Optional[SolutionLoaderBase] = None
+        self.solution_loader: SolutionLoaderBase = SolutionLoader(
+            None, None, None, None
+        )
         self.termination_condition: TerminationCondition = TerminationCondition.unknown
         self.best_feasible_objective: Optional[float] = None
         self.best_objective_bound: Optional[float] = None
 
     def __str__(self):
         s = ''
-        s += 'termination_condition: '   + str(self.termination_condition)   + '\n'
+        s += 'termination_condition: ' + str(self.termination_condition) + '\n'
         s += 'best_feasible_objective: ' + str(self.best_feasible_objective) + '\n'
-        s += 'best_objective_bound: '    + str(self.best_objective_bound)
+        s += 'best_objective_bound: ' + str(self.best_objective_bound)
         return s
 
 
 class UpdateConfig(ConfigDict):
     """
+    Config options common to all persistent solvers
+
     Attributes
     ----------
     check_for_new_or_removed_constraints: bool
@@ -346,61 +453,214 @@ class UpdateConfig(ConfigDict):
     update_params: bool
     update_named_expressions: bool
     """
-    def __init__(self,
-                 description=None,
-                 doc=None,
-                 implicit=False,
-                 implicit_domain=None,
-                 visibility=0):
-        super(UpdateConfig, self).__init__(description=description,
-                                           doc=doc,
-                                           implicit=implicit,
-                                           implicit_domain=implicit_domain,
-                                           visibility=visibility)
 
-        self.declare('check_for_new_or_removed_constraints', ConfigValue(domain=bool))
-        self.declare('check_for_new_or_removed_vars', ConfigValue(domain=bool))
-        self.declare('check_for_new_or_removed_params', ConfigValue(domain=bool))
-        self.declare('update_constraints', ConfigValue(domain=bool))
-        self.declare('update_vars', ConfigValue(domain=bool))
-        self.declare('update_params', ConfigValue(domain=bool))
-        self.declare('update_named_expressions', ConfigValue(domain=bool))
+    def __init__(
+        self,
+        description=None,
+        doc=None,
+        implicit=False,
+        implicit_domain=None,
+        visibility=0,
+    ):
+        if doc is None:
+            doc = 'Configuration options to detect changes in model between solves'
+        super(UpdateConfig, self).__init__(
+            description=description,
+            doc=doc,
+            implicit=implicit,
+            implicit_domain=implicit_domain,
+            visibility=visibility,
+        )
+
+        self.declare(
+            'check_for_new_or_removed_constraints',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, new/old constraints will not be automatically detected on subsequent
+                solves. Use False only when manually updating the solver with opt.add_constraints()
+                and opt.remove_constraints() or when you are certain constraints are not being
+                added to/removed from the model.""",
+            ),
+        )
+        self.declare(
+            'check_for_new_or_removed_vars',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, new/old variables will not be automatically detected on subsequent 
+                solves. Use False only when manually updating the solver with opt.add_variables() and 
+                opt.remove_variables() or when you are certain variables are not being added to /
+                removed from the model.""",
+            ),
+        )
+        self.declare(
+            'check_for_new_or_removed_params',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, new/old parameters will not be automatically detected on subsequent 
+                solves. Use False only when manually updating the solver with opt.add_params() and 
+                opt.remove_params() or when you are certain parameters are not being added to /
+                removed from the model.""",
+            ),
+        )
+        self.declare(
+            'check_for_new_objective',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, new/old objectives will not be automatically detected on subsequent 
+                solves. Use False only when manually updating the solver with opt.set_objective() or 
+                when you are certain objectives are not being added to / removed from the model.""",
+            ),
+        )
+        self.declare(
+            'update_constraints',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, changes to existing constraints will not be automatically detected on 
+                subsequent solves. This includes changes to the lower, body, and upper attributes of 
+                constraints. Use False only when manually updating the solver with 
+                opt.remove_constraints() and opt.add_constraints() or when you are certain constraints 
+                are not being modified.""",
+            ),
+        )
+        self.declare(
+            'update_vars',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, changes to existing variables will not be automatically detected on 
+                subsequent solves. This includes changes to the lb, ub, domain, and fixed 
+                attributes of variables. Use False only when manually updating the solver with 
+                opt.update_variables() or when you are certain variables are not being modified.""",
+            ),
+        )
+        self.declare(
+            'update_params',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, changes to parameter values will not be automatically detected on 
+                subsequent solves. Use False only when manually updating the solver with 
+                opt.update_params() or when you are certain parameters are not being modified.""",
+            ),
+        )
+        self.declare(
+            'update_named_expressions',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, changes to Expressions will not be automatically detected on 
+                subsequent solves. Use False only when manually updating the solver with 
+                opt.remove_constraints() and opt.add_constraints() or when you are certain 
+                Expressions are not being modified.""",
+            ),
+        )
+        self.declare(
+            'update_objective',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                If False, changes to objectives will not be automatically detected on 
+                subsequent solves. This includes the expr and sense attributes of objectives. Use 
+                False only when manually updating the solver with opt.set_objective() or when you are 
+                certain objectives are not being modified.""",
+            ),
+        )
+        self.declare(
+            'treat_fixed_vars_as_params',
+            ConfigValue(
+                domain=bool,
+                default=True,
+                doc="""
+                This is an advanced option that should only be used in special circumstances. 
+                With the default setting of True, fixed variables will be treated like parameters. 
+                This means that z == x*y will be linear if x or y is fixed and the constraint 
+                can be written to an LP file. If the value of the fixed variable gets changed, we have 
+                to completely reprocess all constraints using that variable. If 
+                treat_fixed_vars_as_params is False, then constraints will be processed as if fixed 
+                variables are not fixed, and the solver will be told the variable is fixed. This means 
+                z == x*y could not be written to an LP file even if x and/or y is fixed. However, 
+                updating the values of fixed variables is much faster this way.""",
+            ),
+        )
 
         self.check_for_new_or_removed_constraints: bool = True
         self.check_for_new_or_removed_vars: bool = True
         self.check_for_new_or_removed_params: bool = True
+        self.check_for_new_objective: bool = True
         self.update_constraints: bool = True
         self.update_vars: bool = True
         self.update_params: bool = True
         self.update_named_expressions: bool = True
+        self.update_objective: bool = True
+        self.treat_fixed_vars_as_params: bool = True
 
 
 class Solver(abc.ABC):
-    class Availability(enum.IntEnum):
+    class Availability(IntEnum):
         NotFound = 0
         BadVersion = -1
         BadLicense = -2
         FullLicense = 1
         LimitedLicense = 2
+        NeedsCompiledExtension = -3
 
         def __bool__(self):
             return self._value_ > 0
 
+        def __format__(self, format_spec):
+            # We want general formatting of this Enum to return the
+            # formatted string value and not the int (which is the
+            # default implementation from IntEnum)
+            return format(self.name, format_spec)
+
+        def __str__(self):
+            # Note: Python 3.11 changed the core enums so that the
+            # "mixin" type for standard enums overrides the behavior
+            # specified in __format__.  We will override str() here to
+            # preserve the previous behavior
+            return self.name
+
+    @classmethod
+    def api_version(self):
+        """
+        Return the public API supported by this interface.
+
+        Returns
+        -------
+        ~pyomo.common.enums.SolverAPIVersion
+            A solver API enum object
+        """
+        return SolverAPIVersion.APPSI
+
     @abc.abstractmethod
-    def solve(self, model: _BlockData, timer: HierarchicalTimer = None) -> Results:
+    def solve(self, model: BlockData, timer: HierarchicalTimer = None) -> Results:
         """
         Solve a Pyomo model.
 
         Parameters
         ----------
-        model: _BlockData
+        model: BlockData
             The Pyomo model to be solved
         timer: HierarchicalTimer
             An option timer for reporting timing
 
         Returns
         -------
-        results: Results
+        results: ~pyomo.contrib.appsi.base.Results
             A results object
         """
         pass
@@ -427,7 +687,7 @@ class Solver(abc.ABC):
         available: Solver.Availability
             An enum that indicates "how available" the solver is.
             Note that the enum can be cast to bool, which will
-            be True if the solver is runable at all and False
+            be True if the solver is runnable at all and False
             otherwise.
         """
         pass
@@ -449,7 +709,7 @@ class Solver(abc.ABC):
 
         Returns
         -------
-        SolverConfig
+        ~pyomo.contrib.appsi.base.SolverConfig
             An object for configuring pyomo solve options such as the time limit.
             These options are mostly independent of the solver.
         """
@@ -474,9 +734,9 @@ class PersistentSolver(Solver):
     def is_persistent(self):
         return True
 
-    def load_vars(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> NoReturn:
+    def load_vars(self, vars_to_load: Optional[Sequence[VarData]] = None) -> NoReturn:
         """
-        Load the solution of the primal variables into the value attribut of the variables.
+        Load the solution of the primal variables into the value attribute of the variables.
 
         Parameters
         ----------
@@ -486,12 +746,17 @@ class PersistentSolver(Solver):
         """
         for v, val in self.get_primals(vars_to_load=vars_to_load).items():
             v.set_value(val, skip_validation=True)
+        StaleFlagManager.mark_all_as_stale(delayed=True)
 
     @abc.abstractmethod
-    def get_primals(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> Mapping[_GeneralVarData, float]:
+    def get_primals(
+        self, vars_to_load: Optional[Sequence[VarData]] = None
+    ) -> Mapping[VarData, float]:
         pass
 
-    def get_duals(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_duals(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
         """
         Declare sign convention in docstring here.
 
@@ -506,9 +771,13 @@ class PersistentSolver(Solver):
         duals: dict
             Maps constraints to dual values
         """
-        raise NotImplementedError('{0} does not support the get_duals method'.format(type(self)))
+        raise NotImplementedError(
+            '{0} does not support the get_duals method'.format(type(self))
+        )
 
-    def get_slacks(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_slacks(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
         """
         Parameters
         ----------
@@ -521,9 +790,13 @@ class PersistentSolver(Solver):
         slacks: dict
             Maps constraints to slack values
         """
-        raise NotImplementedError('{0} does not support the get_slacks method'.format(type(self)))
+        raise NotImplementedError(
+            '{0} does not support the get_slacks method'.format(type(self))
+        )
 
-    def get_reduced_costs(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> Mapping[_GeneralVarData, float]:
+    def get_reduced_costs(
+        self, vars_to_load: Optional[Sequence[VarData]] = None
+    ) -> Mapping[VarData, float]:
         """
         Parameters
         ----------
@@ -536,7 +809,9 @@ class PersistentSolver(Solver):
         reduced_costs: ComponentMap
             Maps variable to reduced cost
         """
-        raise NotImplementedError('{0} does not support the get_reduced_costs method'.format(type(self)))
+        raise NotImplementedError(
+            '{0} does not support the get_reduced_costs method'.format(type(self))
+        )
 
     @property
     @abc.abstractmethod
@@ -548,43 +823,43 @@ class PersistentSolver(Solver):
         pass
 
     @abc.abstractmethod
-    def add_variables(self, variables: List[_GeneralVarData]):
+    def add_variables(self, variables: List[VarData]):
         pass
 
     @abc.abstractmethod
-    def add_params(self, params: List[_ParamData]):
+    def add_params(self, params: List[ParamData]):
         pass
 
     @abc.abstractmethod
-    def add_constraints(self, cons: List[_GeneralConstraintData]):
+    def add_constraints(self, cons: List[ConstraintData]):
         pass
 
     @abc.abstractmethod
-    def add_block(self, block: _BlockData):
+    def add_block(self, block: BlockData):
         pass
 
     @abc.abstractmethod
-    def remove_variables(self, variables: List[_GeneralVarData]):
+    def remove_variables(self, variables: List[VarData]):
         pass
 
     @abc.abstractmethod
-    def remove_params(self, params: List[_ParamData]):
+    def remove_params(self, params: List[ParamData]):
         pass
 
     @abc.abstractmethod
-    def remove_constraints(self, cons: List[_GeneralConstraintData]):
+    def remove_constraints(self, cons: List[ConstraintData]):
         pass
 
     @abc.abstractmethod
-    def remove_block(self, block: _BlockData):
+    def remove_block(self, block: BlockData):
         pass
 
     @abc.abstractmethod
-    def set_objective(self, obj: _GeneralObjectiveData):
+    def set_objective(self, obj: ObjectiveData):
         pass
 
     @abc.abstractmethod
-    def update_variables(self, variables: List[_GeneralVarData]):
+    def update_variables(self, variables: List[VarData]):
         pass
 
     @abc.abstractmethod
@@ -605,15 +880,21 @@ class PersistentSolutionLoader(SolutionLoaderBase):
         self._assert_solution_still_valid()
         return self._solver.get_primals(vars_to_load=vars_to_load)
 
-    def get_duals(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_duals(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
         self._assert_solution_still_valid()
         return self._solver.get_duals(cons_to_load=cons_to_load)
 
-    def get_slacks(self, cons_to_load: Optional[Sequence[_GeneralConstraintData]] = None) -> Dict[_GeneralConstraintData, float]:
+    def get_slacks(
+        self, cons_to_load: Optional[Sequence[ConstraintData]] = None
+    ) -> Dict[ConstraintData, float]:
         self._assert_solution_still_valid()
         return self._solver.get_slacks(cons_to_load=cons_to_load)
 
-    def get_reduced_costs(self, vars_to_load: Optional[Sequence[_GeneralVarData]] = None) -> Mapping[_GeneralVarData, float]:
+    def get_reduced_costs(
+        self, vars_to_load: Optional[Sequence[VarData]] = None
+    ) -> Mapping[VarData, float]:
         self._assert_solution_still_valid()
         return self._solver.get_reduced_costs(vars_to_load=vars_to_load)
 
@@ -654,7 +935,7 @@ Notes:
 
 
 class PersistentBase(abc.ABC):
-    def __init__(self):
+    def __init__(self, only_child_vars=False):
         self._model = None
         self._active_constraints = dict()  # maps constraint to (lower, body, upper)
         self._vars = dict()  # maps var id to (var, lb, ub, fixed, domain, value)
@@ -662,13 +943,20 @@ class PersistentBase(abc.ABC):
         self._objective = None
         self._objective_expr = None
         self._objective_sense = None
-        self._named_expressions = dict()  # maps constraint to list of tuples (named_expr, named_expr.expr)
+        self._named_expressions = (
+            dict()
+        )  # maps constraint to list of tuples (named_expr, named_expr.expr)
         self._external_functions = ComponentMap()
         self._obj_named_expressions = list()
         self._update_config = UpdateConfig()
-        self._referenced_variables = dict()  # number of constraints/objectives each variable is used in
+        self._referenced_variables = (
+            dict()
+        )  # var_id: [dict[constraints, None], dict[sos constraints, None], None or objective]
         self._vars_referenced_by_con = dict()
         self._vars_referenced_by_obj = list()
+        self._expr_types = None
+        self.use_extensions = False
+        self._only_child_vars = only_child_vars
 
     @property
     def update_config(self):
@@ -680,96 +968,146 @@ class PersistentBase(abc.ABC):
 
     def set_instance(self, model):
         saved_update_config = self.update_config
-        self.__init__()
+        self.__init__(only_child_vars=self._only_child_vars)
         self.update_config = saved_update_config
         self._model = model
+        if self.use_extensions and cmodel_available:
+            self._expr_types = cmodel.PyomoExprTypes()
         self.add_block(model)
         if self._objective is None:
             self.set_objective(None)
 
     @abc.abstractmethod
-    def _add_variables(self, variables: List[_GeneralVarData]):
+    def _add_variables(self, variables: List[VarData]):
         pass
 
-    def add_variables(self, variables: List[_GeneralVarData]):
+    def add_variables(self, variables: List[VarData]):
         for v in variables:
             if id(v) in self._referenced_variables:
-                raise ValueError('variable {name} has already been added'.format(name=v.name))
-            self._referenced_variables[id(v)] = 0
-            self._vars[id(v)] = (v, v.lb, v.ub, v.is_fixed(), v.domain, v.value)
+                raise ValueError(
+                    'variable {name} has already been added'.format(name=v.name)
+                )
+            self._referenced_variables[id(v)] = [dict(), dict(), None]
+            self._vars[id(v)] = (
+                v,
+                v._lb,
+                v._ub,
+                v.fixed,
+                v.domain.get_interval(),
+                v.value,
+            )
         self._add_variables(variables)
 
     @abc.abstractmethod
-    def _add_params(self, params: List[_ParamData]):
+    def _add_params(self, params: List[ParamData]):
         pass
 
-    def add_params(self, params: List[_ParamData]):
+    def add_params(self, params: List[ParamData]):
         for p in params:
             self._params[id(p)] = p
         self._add_params(params)
 
     @abc.abstractmethod
-    def _add_constraints(self, cons: List[_GeneralConstraintData]):
+    def _add_constraints(self, cons: List[ConstraintData]):
         pass
 
-    def add_constraints(self, cons: List[_GeneralConstraintData]):
+    def _check_for_new_vars(self, variables: List[VarData]):
+        new_vars = dict()
+        for v in variables:
+            v_id = id(v)
+            if v_id not in self._referenced_variables:
+                new_vars[v_id] = v
+        self.add_variables(list(new_vars.values()))
+
+    def _check_to_remove_vars(self, variables: List[VarData]):
+        vars_to_remove = dict()
+        for v in variables:
+            v_id = id(v)
+            ref_cons, ref_sos, ref_obj = self._referenced_variables[v_id]
+            if len(ref_cons) == 0 and len(ref_sos) == 0 and ref_obj is None:
+                vars_to_remove[v_id] = v
+        self.remove_variables(list(vars_to_remove.values()))
+
+    def add_constraints(self, cons: List[ConstraintData]):
         all_fixed_vars = dict()
         for con in cons:
             if con in self._named_expressions:
-                raise ValueError('constraint {name} has already been added'.format(name=con.name))
-            self._active_constraints[con] = (con.lower, con.body, con.upper)
-            named_exprs, variables, fixed_vars, external_functions = identify_named_expressions(con.body)
+                raise ValueError(
+                    'constraint {name} has already been added'.format(name=con.name)
+                )
+            self._active_constraints[con] = con.expr
+            if self.use_extensions and cmodel_available:
+                tmp = cmodel.prep_for_repn(con.body, self._expr_types)
+            else:
+                tmp = collect_vars_and_named_exprs(con.body)
+            named_exprs, variables, fixed_vars, external_functions = tmp
+            if not self._only_child_vars:
+                self._check_for_new_vars(variables)
             self._named_expressions[con] = [(e, e.expr) for e in named_exprs]
             if len(external_functions) > 0:
                 self._external_functions[con] = external_functions
             self._vars_referenced_by_con[con] = variables
             for v in variables:
-                self._referenced_variables[id(v)] += 1
-            for v in fixed_vars:
-                v.unfix()
-                all_fixed_vars[id(v)] = v
+                self._referenced_variables[id(v)][0][con] = None
+            if not self.update_config.treat_fixed_vars_as_params:
+                for v in fixed_vars:
+                    v.unfix()
+                    all_fixed_vars[id(v)] = v
         self._add_constraints(cons)
         for v in all_fixed_vars.values():
             v.fix()
 
     @abc.abstractmethod
-    def _add_sos_constraints(self, cons: List[_SOSConstraintData]):
+    def _add_sos_constraints(self, cons: List[SOSConstraintData]):
         pass
 
-    def add_sos_constraints(self, cons: List[_SOSConstraintData]):
+    def add_sos_constraints(self, cons: List[SOSConstraintData]):
         for con in cons:
             if con in self._vars_referenced_by_con:
-                raise ValueError('constraint {name} has already been added'.format(name=con.name))
+                raise ValueError(
+                    'constraint {name} has already been added'.format(name=con.name)
+                )
             self._active_constraints[con] = tuple()
             variables = con.get_variables()
+            if not self._only_child_vars:
+                self._check_for_new_vars(variables)
             self._named_expressions[con] = list()
             self._vars_referenced_by_con[con] = variables
             for v in variables:
-                self._referenced_variables[id(v)] += 1
+                self._referenced_variables[id(v)][1][con] = None
         self._add_sos_constraints(cons)
 
     @abc.abstractmethod
-    def _set_objective(self, obj: _GeneralObjectiveData):
+    def _set_objective(self, obj: ObjectiveData):
         pass
 
-    def set_objective(self, obj: _GeneralObjectiveData):
+    def set_objective(self, obj: ObjectiveData):
         if self._objective is not None:
             for v in self._vars_referenced_by_obj:
-                self._referenced_variables[id(v)] -= 1
+                self._referenced_variables[id(v)][2] = None
+            if not self._only_child_vars:
+                self._check_to_remove_vars(self._vars_referenced_by_obj)
             self._external_functions.pop(self._objective, None)
         if obj is not None:
             self._objective = obj
             self._objective_expr = obj.expr
             self._objective_sense = obj.sense
-            named_exprs, variables, fixed_vars, external_functions = identify_named_expressions(obj.expr)
+            if self.use_extensions and cmodel_available:
+                tmp = cmodel.prep_for_repn(obj.expr, self._expr_types)
+            else:
+                tmp = collect_vars_and_named_exprs(obj.expr)
+            named_exprs, variables, fixed_vars, external_functions = tmp
+            if not self._only_child_vars:
+                self._check_for_new_vars(variables)
             self._obj_named_expressions = [(i, i.expr) for i in named_exprs]
             if len(external_functions) > 0:
                 self._external_functions[obj] = external_functions
             self._vars_referenced_by_obj = variables
             for v in variables:
-                self._referenced_variables[id(v)] += 1
-            for v in fixed_vars:
-                v.unfix()
+                self._referenced_variables[id(v)][2] = obj
+            if not self.update_config.treat_fixed_vars_as_params:
+                for v in fixed_vars:
+                    v.unfix()
             self._set_objective(obj)
             for v in fixed_vars:
                 v.fix()
@@ -782,98 +1120,174 @@ class PersistentBase(abc.ABC):
             self._set_objective(obj)
 
     def add_block(self, block):
-        self.add_variables(list(OrderedDict((id(var), var) for var in block.component_data_objects(Var, descend_into=True, sort=False)).values()))
-        param_dict = OrderedDict()
-        for p in block.component_objects(Param, descend_into=True, sort=False):
+        param_dict = dict()
+        for p in block.component_objects(Param, descend_into=True):
             if p.mutable:
                 for _p in p.values():
                     param_dict[id(_p)] = _p
         self.add_params(list(param_dict.values()))
-        self.add_constraints([con for con in block.component_data_objects(Constraint, descend_into=True,
-                                                                          active=True, sort=False)])
-        self.add_sos_constraints([con for con in block.component_data_objects(SOSConstraint, descend_into=True,
-                                                                              active=True, sort=False)])
+        if self._only_child_vars:
+            self.add_variables(
+                list(
+                    dict(
+                        (id(var), var)
+                        for var in block.component_data_objects(Var, descend_into=True)
+                    ).values()
+                )
+            )
+        self.add_constraints(
+            [
+                con
+                for con in block.component_data_objects(
+                    Constraint, descend_into=True, active=True
+                )
+            ]
+        )
+        self.add_sos_constraints(
+            [
+                con
+                for con in block.component_data_objects(
+                    SOSConstraint, descend_into=True, active=True
+                )
+            ]
+        )
         obj = get_objective(block)
         if obj is not None:
             self.set_objective(obj)
 
     @abc.abstractmethod
-    def _remove_constraints(self, cons: List[_GeneralConstraintData]):
+    def _remove_constraints(self, cons: List[ConstraintData]):
         pass
 
-    def remove_constraints(self, cons: List[_GeneralConstraintData]):
+    def remove_constraints(self, cons: List[ConstraintData]):
         self._remove_constraints(cons)
         for con in cons:
             if con not in self._named_expressions:
-                raise ValueError('cannot remove constraint {name} - it was not added'.format(name=con.name))
+                raise ValueError(
+                    'cannot remove constraint {name} - it was not added'.format(
+                        name=con.name
+                    )
+                )
             for v in self._vars_referenced_by_con[con]:
-                self._referenced_variables[id(v)] -= 1
+                self._referenced_variables[id(v)][0].pop(con)
+            if not self._only_child_vars:
+                self._check_to_remove_vars(self._vars_referenced_by_con[con])
             del self._active_constraints[con]
             del self._named_expressions[con]
             self._external_functions.pop(con, None)
             del self._vars_referenced_by_con[con]
 
     @abc.abstractmethod
-    def _remove_sos_constraints(self, cons: List[_SOSConstraintData]):
+    def _remove_sos_constraints(self, cons: List[SOSConstraintData]):
         pass
 
-    def remove_sos_constraints(self, cons: List[_SOSConstraintData]):
+    def remove_sos_constraints(self, cons: List[SOSConstraintData]):
         self._remove_sos_constraints(cons)
         for con in cons:
             if con not in self._vars_referenced_by_con:
-                raise ValueError('cannot remove constraint {name} - it was not added'.format(name=con.name))
+                raise ValueError(
+                    'cannot remove constraint {name} - it was not added'.format(
+                        name=con.name
+                    )
+                )
             for v in self._vars_referenced_by_con[con]:
-                self._referenced_variables[id(v)] -= 1
+                self._referenced_variables[id(v)][1].pop(con)
+            self._check_to_remove_vars(self._vars_referenced_by_con[con])
             del self._active_constraints[con]
             del self._named_expressions[con]
             del self._vars_referenced_by_con[con]
 
     @abc.abstractmethod
-    def _remove_variables(self, variables: List[_GeneralVarData]):
+    def _remove_variables(self, variables: List[VarData]):
         pass
 
-    def remove_variables(self, variables: List[_GeneralVarData]):
+    def remove_variables(self, variables: List[VarData]):
         self._remove_variables(variables)
         for v in variables:
-            if id(v) not in self._referenced_variables:
-                raise ValueError('cannot remove variable {name} - it has not been added'.format(name=v.name))
-            if self._referenced_variables[id(v)] != 0:
-                raise ValueError('cannot remove variable {name} - it is still being used by constraints or the objective'.format(name=v.name))
-            del self._referenced_variables[id(v)]
-            del self._vars[id(v)]
+            v_id = id(v)
+            if v_id not in self._referenced_variables:
+                raise ValueError(
+                    'cannot remove variable {name} - it has not been added'.format(
+                        name=v.name
+                    )
+                )
+            cons_using, sos_using, obj_using = self._referenced_variables[v_id]
+            if cons_using or sos_using or (obj_using is not None):
+                raise ValueError(
+                    'cannot remove variable {name} - it is still being used by constraints or the objective'.format(
+                        name=v.name
+                    )
+                )
+            del self._referenced_variables[v_id]
+            del self._vars[v_id]
 
     @abc.abstractmethod
-    def _remove_params(self, params: List[_ParamData]):
+    def _remove_params(self, params: List[ParamData]):
         pass
 
-    def remove_params(self, params: List[_ParamData]):
+    def remove_params(self, params: List[ParamData]):
         self._remove_params(params)
         for p in params:
             del self._params[id(p)]
 
     def remove_block(self, block):
-        self.remove_constraints([con for con in block.component_data_objects(ctype=Constraint, descend_into=True,
-                                                                             active=True, sort=False)])
-        self.remove_sos_constraints([con for con in block.component_data_objects(ctype=SOSConstraint, descend_into=True,
-                                                                                 active=True, sort=False)])
-        self.remove_variables(list(OrderedDict((id(var), var) for var in block.component_data_objects(ctype=Var, descend_into=True, sort=False)).values()))
-        self.remove_params(list(OrderedDict((id(p), p) for p in block.component_data_objects(ctype=Param, descend_into=True, sort=False)).values()))
+        self.remove_constraints(
+            [
+                con
+                for con in block.component_data_objects(
+                    ctype=Constraint, descend_into=True, active=True
+                )
+            ]
+        )
+        self.remove_sos_constraints(
+            [
+                con
+                for con in block.component_data_objects(
+                    ctype=SOSConstraint, descend_into=True, active=True
+                )
+            ]
+        )
+        if self._only_child_vars:
+            self.remove_variables(
+                list(
+                    dict(
+                        (id(var), var)
+                        for var in block.component_data_objects(
+                            ctype=Var, descend_into=True
+                        )
+                    ).values()
+                )
+            )
+        self.remove_params(
+            list(
+                dict(
+                    (id(p), p)
+                    for p in block.component_data_objects(
+                        ctype=Param, descend_into=True
+                    )
+                ).values()
+            )
+        )
 
     @abc.abstractmethod
-    def _update_variables(self, variables: List[_GeneralVarData]):
+    def _update_variables(self, variables: List[VarData]):
         pass
 
-    def update_variables(self, variables: List[_GeneralVarData]):
+    def update_variables(self, variables: List[VarData]):
         for v in variables:
-            self._vars[id(v)] = (v, v.lb, v.ub, v.is_fixed(), v.domain, v.value)
+            self._vars[id(v)] = (
+                v,
+                v._lb,
+                v._ub,
+                v.fixed,
+                v.domain.get_interval(),
+                v.value,
+            )
         self._update_variables(variables)
 
     @abc.abstractmethod
     def update_params(self):
         pass
-
-    def solve_sub_block(self, block):
-        raise NotImplementedError('This is just an idea right now')
 
     def update(self, timer: HierarchicalTimer = None):
         if timer is None:
@@ -891,19 +1305,26 @@ class PersistentBase(abc.ABC):
         current_cons_dict = dict()
         current_sos_dict = dict()
         timer.start('vars')
-        if config.check_for_new_or_removed_vars or config.update_vars:
-            current_vars_dict = {id(v): v for v in self._model.component_data_objects(Var, descend_into=True, sort=False)}
+        if self._only_child_vars and (
+            config.check_for_new_or_removed_vars or config.update_vars
+        ):
+            current_vars_dict = {
+                id(v): v
+                for v in self._model.component_data_objects(Var, descend_into=True)
+            }
             for v_id, v in current_vars_dict.items():
                 if v_id not in self._vars:
                     new_vars.append(v)
             for v_id, v_tuple in self._vars.items():
                 if v_id not in current_vars_dict:
                     old_vars.append(v_tuple[0])
+        elif config.update_vars:
+            start_vars = {v_id: v_tuple[0] for v_id, v_tuple in self._vars.items()}
         timer.stop('vars')
         timer.start('params')
         if config.check_for_new_or_removed_params:
             current_params_dict = dict()
-            for p in self._model.component_objects(Param, descend_into=True, sort=False):
+            for p in self._model.component_objects(Param, descend_into=True):
                 if p.mutable:
                     for _p in p.values():
                         current_params_dict[id(_p)] = _p
@@ -916,8 +1337,18 @@ class PersistentBase(abc.ABC):
         timer.stop('params')
         timer.start('cons')
         if config.check_for_new_or_removed_constraints or config.update_constraints:
-            current_cons_dict = {c: None for c in self._model.component_data_objects(Constraint, descend_into=True, active=True, sort=False)}
-            current_sos_dict = {c: None for c in self._model.component_data_objects(SOSConstraint, descend_into=True, active=True, sort=False)}
+            current_cons_dict = {
+                c: None
+                for c in self._model.component_data_objects(
+                    Constraint, descend_into=True, active=True
+                )
+            }
+            current_sos_dict = {
+                c: None
+                for c in self._model.component_data_objects(
+                    SOSConstraint, descend_into=True, active=True
+                )
+            }
             for c in current_cons_dict.keys():
                 if c not in self._vars_referenced_by_con:
                     new_cons.append(c)
@@ -926,17 +1357,18 @@ class PersistentBase(abc.ABC):
                     new_sos.append(c)
             for c in self._vars_referenced_by_con.keys():
                 if c not in current_cons_dict and c not in current_sos_dict:
-                    if (c.ctype is Constraint) or (c.ctype is None and isinstance(c, _GeneralConstraintData)):
+                    if (c.ctype is Constraint) or (
+                        c.ctype is None and isinstance(c, ConstraintData)
+                    ):
                         old_cons.append(c)
                     else:
-                        assert (c.ctype is SOSConstraint) or (c.ctype is None and isinstance(c, _SOSConstraintData))
+                        assert (c.ctype is SOSConstraint) or (
+                            c.ctype is None and isinstance(c, SOSConstraintData)
+                        )
                         old_sos.append(c)
         self.remove_constraints(old_cons)
         self.remove_sos_constraints(old_sos)
         timer.stop('cons')
-        timer.start('vars')
-        self.remove_variables(old_vars)
-        timer.stop('vars')
         timer.start('params')
         self.remove_params(old_params)
 
@@ -956,46 +1388,52 @@ class PersistentBase(abc.ABC):
         new_cons_set = set(new_cons)
         new_sos_set = set(new_sos)
         new_vars_set = set(id(v) for v in new_vars)
+        cons_to_remove_and_add = dict()
+        need_to_set_objective = False
         if config.update_constraints:
-            cons_to_update = list()
-            sos_to_update = list()
             for c in current_cons_dict.keys():
-                if c not in new_cons_set:
-                    cons_to_update.append(c)
+                if c not in new_cons_set and c.expr is not self._active_constraints[c]:
+                    cons_to_remove_and_add[c] = None
+            sos_to_update = []
             for c in current_sos_dict.keys():
                 if c not in new_sos_set:
                     sos_to_update.append(c)
-            cons_to_remove_and_add = list()
-            for c in cons_to_update:
-                lower, body, upper = self._active_constraints[c]
-                if c.lower is not lower or c.body is not body or c.upper is not upper:
-                    cons_to_remove_and_add.append(c)
-            self.remove_constraints(cons_to_remove_and_add)
-            self.add_constraints(cons_to_remove_and_add)
             self.remove_sos_constraints(sos_to_update)
             self.add_sos_constraints(sos_to_update)
         timer.stop('cons')
         timer.start('vars')
-        if config.update_vars:
+        if self._only_child_vars and config.update_vars:
             vars_to_check = list()
             for v_id, v in current_vars_dict.items():
                 if v_id not in new_vars_set:
                     vars_to_check.append(v)
+        elif config.update_vars:
+            end_vars = {v_id: v_tuple[0] for v_id, v_tuple in self._vars.items()}
+            vars_to_check = [v for v_id, v in end_vars.items() if v_id in start_vars]
+        if config.update_vars:
             vars_to_update = list()
             for v in vars_to_check:
-                _v, lb, ub, fixed, domain, value = self._vars[id(v)]
-                if lb is not v.lb:
+                _v, lb, ub, fixed, domain_interval, value = self._vars[id(v)]
+                if (fixed != v.fixed) or (fixed and (value != v.value)):
                     vars_to_update.append(v)
-                elif ub is not v.ub:
+                    if self.update_config.treat_fixed_vars_as_params:
+                        for c in self._referenced_variables[id(v)][0]:
+                            cons_to_remove_and_add[c] = None
+                        if self._referenced_variables[id(v)][2] is not None:
+                            need_to_set_objective = True
+                elif lb is not v._lb:
                     vars_to_update.append(v)
-                elif fixed is not v.is_fixed():
+                elif ub is not v._ub:
                     vars_to_update.append(v)
-                elif domain is not v.domain:
-                    vars_to_update.append(v)
-                elif fixed and (value is not v.value):
+                elif domain_interval != v.domain.get_interval():
                     vars_to_update.append(v)
             self.update_variables(vars_to_update)
         timer.stop('vars')
+        timer.start('cons')
+        cons_to_remove_and_add = list(cons_to_remove_and_add.keys())
+        self.remove_constraints(cons_to_remove_and_add)
+        self.add_constraints(cons_to_remove_and_add)
+        timer.stop('cons')
         timer.start('named expressions')
         if config.update_named_expressions:
             cons_to_update = list()
@@ -1008,24 +1446,33 @@ class PersistentBase(abc.ABC):
                         break
             self.remove_constraints(cons_to_update)
             self.add_constraints(cons_to_update)
-        timer.stop('named expressions')
-        timer.start('objective')
-        pyomo_obj = get_objective(self._model)
-        need_to_set_objective = False
-        if pyomo_obj is not self._objective:
-            need_to_set_objective = True
-        elif pyomo_obj is not None and pyomo_obj.expr is not self._objective_expr:
-            need_to_set_objective = True
-        elif pyomo_obj is not None and pyomo_obj.sense is not self._objective_sense:
-            need_to_set_objective = True
-        elif config.update_named_expressions:
             for named_expr, old_expr in self._obj_named_expressions:
                 if named_expr.expr is not old_expr:
                     need_to_set_objective = True
                     break
+        timer.stop('named expressions')
+        timer.start('objective')
+        if self.update_config.check_for_new_objective:
+            pyomo_obj = get_objective(self._model)
+            if pyomo_obj is not self._objective:
+                need_to_set_objective = True
+        else:
+            pyomo_obj = self._objective
+        if self.update_config.update_objective:
+            if pyomo_obj is not None and pyomo_obj.expr is not self._objective_expr:
+                need_to_set_objective = True
+            elif pyomo_obj is not None and pyomo_obj.sense is not self._objective_sense:
+                # we can definitely do something faster here than resetting the whole objective
+                need_to_set_objective = True
         if need_to_set_objective:
             self.set_objective(pyomo_obj)
         timer.stop('objective')
+
+        # this has to be done after the objective and constraints in case the
+        # old objective/constraints use old variables
+        timer.start('vars')
+        self.remove_variables(old_vars)
+        timer.stop('vars')
 
 
 legacy_termination_condition_map = {
@@ -1040,7 +1487,7 @@ legacy_termination_condition_map = {
     TerminationCondition.infeasibleOrUnbounded: LegacyTerminationCondition.infeasibleOrUnbounded,
     TerminationCondition.error: LegacyTerminationCondition.error,
     TerminationCondition.interrupted: LegacyTerminationCondition.resourceInterrupt,
-    TerminationCondition.licensingProblems: LegacyTerminationCondition.licensingProblems
+    TerminationCondition.licensingProblems: LegacyTerminationCondition.licensingProblems,
 }
 
 
@@ -1056,7 +1503,7 @@ legacy_solver_status_map = {
     TerminationCondition.infeasibleOrUnbounded: LegacySolverStatus.error,
     TerminationCondition.error: LegacySolverStatus.error,
     TerminationCondition.interrupted: LegacySolverStatus.aborted,
-    TerminationCondition.licensingProblems: LegacySolverStatus.error
+    TerminationCondition.licensingProblems: LegacySolverStatus.error,
 }
 
 
@@ -1072,30 +1519,34 @@ legacy_solution_status_map = {
     TerminationCondition.infeasibleOrUnbounded: LegacySolutionStatus.unsure,
     TerminationCondition.error: LegacySolutionStatus.error,
     TerminationCondition.interrupted: LegacySolutionStatus.error,
-    TerminationCondition.licensingProblems: LegacySolutionStatus.error
+    TerminationCondition.licensingProblems: LegacySolutionStatus.error,
 }
 
 
-class LegacySolverInterface(object):
-    def solve(self,
-              model: _BlockData,
-              tee: bool = False,
-              load_solutions: bool = True,
-              logfile: Optional[str] = None,
-              solnfile: Optional[str] = None,
-              timelimit: Optional[float] = None,
-              report_timing: bool = False,
-              solver_io: Optional[str] = None,
-              suffixes: Optional[Sequence] = None,
-              options: Optional[Dict] = None,
-              keepfiles: bool = False,
-              symbolic_solver_labels: bool = False):
+class LegacySolverInterface:
+    def solve(
+        self,
+        model: BlockData,
+        tee: bool = False,
+        load_solutions: bool = True,
+        logfile: Optional[str] = None,
+        solnfile: Optional[str] = None,
+        timelimit: Optional[float] = None,
+        report_timing: bool = False,
+        solver_io: Optional[str] = None,
+        suffixes: Optional[Sequence] = None,
+        options: Optional[Dict] = None,
+        keepfiles: bool = False,
+        symbolic_solver_labels: bool = False,
+        warmstart: bool = False,
+    ):
         original_config = self.config
         self.config = self.config()
         self.config.stream_solver = tee
         self.config.load_solution = load_solutions
         self.config.symbolic_solver_labels = symbolic_solver_labels
         self.config.time_limit = timelimit
+        self.config.warmstart = warmstart
         self.config.report_timing = report_timing
         if solver_io is not None:
             raise NotImplementedError('Still working on this')
@@ -1117,8 +1568,12 @@ class LegacySolverInterface(object):
 
         legacy_results = LegacySolverResults()
         legacy_soln = LegacySolution()
-        legacy_results.solver.status = legacy_solver_status_map[results.termination_condition]
-        legacy_results.solver.termination_condition = legacy_termination_condition_map[results.termination_condition]
+        legacy_results.solver.status = legacy_solver_status_map[
+            results.termination_condition
+        ]
+        legacy_results.solver.termination_condition = legacy_termination_condition_map[
+            results.termination_condition
+        ]
         legacy_soln.status = legacy_solution_status_map[results.termination_condition]
         legacy_results.solver.termination_message = str(results.termination_condition)
 
@@ -1131,20 +1586,23 @@ class LegacySolverInterface(object):
         else:
             legacy_results.problem.upper_bound = results.best_objective_bound
             legacy_results.problem.lower_bound = results.best_feasible_objective
-        if results.best_feasible_objective is not None and results.best_objective_bound is not None:
-            legacy_soln.gap = abs(results.best_feasible_objective - results.best_objective_bound)
+        if (
+            results.best_feasible_objective is not None
+            and results.best_objective_bound is not None
+        ):
+            legacy_soln.gap = abs(
+                results.best_feasible_objective - results.best_objective_bound
+            )
         else:
             legacy_soln.gap = None
 
         symbol_map = SymbolMap()
         symbol_map.byObject = dict(self.symbol_map.byObject)
-        symbol_map.bySymbol = {symb: weakref.ref(obj()) for symb, obj in self.symbol_map.bySymbol.items()}
-        symbol_map.aliases = {symb: weakref.ref(obj()) for symb, obj in self.symbol_map.aliases.items()}
+        symbol_map.bySymbol = dict(self.symbol_map.bySymbol)
+        symbol_map.aliases = dict(self.symbol_map.aliases)
         symbol_map.default_labeler = self.symbol_map.default_labeler
-        model.solutions.add_symbol_map(symbol_map)
-        legacy_results._smap_id = id(symbol_map)
+        legacy_results._smap_id = None
 
-        delete_legacy_soln = True
         if load_solutions:
             if hasattr(model, 'dual') and model.dual.import_enabled():
                 for c, val in results.solution_loader.get_duals().items():
@@ -1156,7 +1614,6 @@ class LegacySolverInterface(object):
                 for v, val in results.solution_loader.get_reduced_costs().items():
                     model.rc[v] = val
         elif results.best_feasible_objective is not None:
-            delete_legacy_soln = False
             for v, val in results.solution_loader.get_primals().items():
                 legacy_soln.variable[symbol_map.getSymbol(v)] = {'Value': val}
             if hasattr(model, 'dual') and model.dual.import_enabled():
@@ -1169,11 +1626,13 @@ class LegacySolverInterface(object):
                         legacy_soln.constraint[symbol]['Slack'] = val
             if hasattr(model, 'rc') and model.rc.import_enabled():
                 for v, val in results.solution_loader.get_reduced_costs().items():
-                    legacy_soln.variable['Rc'] = val
+                    symbol = symbol_map.getSymbol(v)
+                    if symbol in legacy_soln.variable:
+                        legacy_soln.variable[symbol]['Rc'] = val
 
-        legacy_results.solution.insert(legacy_soln)
-        if delete_legacy_soln:
-            legacy_results.solution.delete(0)
+            legacy_results.solution.insert(legacy_soln)
+            legacy_results._smap = symbol_map
+            legacy_results._smap_id = id(symbol_map)
 
         self.config = original_config
         self.options = original_options
@@ -1204,7 +1663,7 @@ class LegacySolverInterface(object):
 
     @property
     def options(self):
-        for solver_name in ['gurobi', 'ipopt', 'cplex', 'cbc']:
+        for solver_name in ['gurobi', 'ipopt', 'cplex', 'cbc', 'highs', 'maingo']:
             if hasattr(self, solver_name + '_options'):
                 return getattr(self, solver_name + '_options')
         raise NotImplementedError('Could not find the correct options')
@@ -1212,19 +1671,30 @@ class LegacySolverInterface(object):
     @options.setter
     def options(self, val):
         found = False
-        for solver_name in ['gurobi', 'ipopt', 'cplex', 'cbc']:
+        for solver_name in ['gurobi', 'ipopt', 'cplex', 'cbc', 'highs', 'maingo']:
             if hasattr(self, solver_name + '_options'):
                 setattr(self, solver_name + '_options', val)
                 found = True
         if not found:
             raise NotImplementedError('Could not find the correct options')
 
-
     def __enter__(self):
         return self
 
     def __exit__(self, t, v, traceback):
         pass
+
+    @classmethod
+    def api_version(self):
+        """
+        Return the public API supported by this interface.
+
+        Returns
+        -------
+        ~pyomo.common.enums.SolverAPIVersion
+            A solver API enum object
+        """
+        return SolverAPIVersion.V1
 
 
 class SolverFactoryClass(Factory):
@@ -1235,10 +1705,16 @@ class SolverFactoryClass(Factory):
 
             class LegacySolver(LegacySolverInterface, cls):
                 pass
-            LegacySolverFactory.register(name, doc)(LegacySolver)
+
+            LegacySolverFactory.register('appsi_' + name, doc)(LegacySolver)
 
             return cls
+
         return decorator
+
+    if TYPE_CHECKING:
+        # NOTE: `Factory.__call__` can return None, but for the common case
+        def __call__(self, name, **kwds) -> Solver: ...
 
 
 SolverFactory = SolverFactoryClass()

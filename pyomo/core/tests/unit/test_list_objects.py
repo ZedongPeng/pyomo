@@ -1,26 +1,27 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import pyomo.common.unittest as unittest
-from pyomo.core.base import (ConcreteModel, Var, Reals)
-from pyomo.core.beta.list_objects import (XVarList,
-                                          XConstraintList,
-                                          XObjectiveList,
-                                          XExpressionList)
-from pyomo.core.base.var import _GeneralVarData
-from pyomo.core.base.constraint import _GeneralConstraintData
-from pyomo.core.base.objective import _GeneralObjectiveData
-from pyomo.core.base.expression import _GeneralExpressionData
+from pyomo.core.base import ConcreteModel, Var, Reals
+from pyomo.core.beta.list_objects import (
+    XVarList,
+    XConstraintList,
+    XObjectiveList,
+    XExpressionList,
+)
+from pyomo.core.base.var import VarData
+from pyomo.core.base.constraint import ConstraintData
+from pyomo.core.base.objective import ObjectiveData
+from pyomo.core.base.expression import ExpressionData
 
-class _TestComponentListBase(object):
 
+class _TestComponentListBase:
     _ctype = None
     _cdatatype = None
 
@@ -47,8 +48,7 @@ class _TestComponentListBase(object):
         self.assertEqual(model.c.is_indexed(), True)
         self.assertEqual(model.c.is_constructed(), True)
         with self.assertRaises(TypeError):
-            model.d = self._ctype(*tuple(self._cdatatype(self._arg())
-                                         for i in index))
+            model.d = self._ctype(*tuple(self._cdatatype(self._arg()) for i in index))
 
     def test_len1(self):
         model = self.model
@@ -70,7 +70,7 @@ class _TestComponentListBase(object):
             c_new = self._cdatatype(self._arg())
             model.c.append(c_new)
             self.assertEqual(id(model.c[-1]), id(c_new))
-            self.assertEqual(len(model.c), i+1)
+            self.assertEqual(len(model.c), i + 1)
 
     def test_insert(self):
         model = self.model
@@ -81,7 +81,7 @@ class _TestComponentListBase(object):
             c_new = self._cdatatype(self._arg())
             model.c.insert(0, c_new)
             self.assertEqual(id(model.c[0]), id(c_new))
-            self.assertEqual(len(model.c), i+1)
+            self.assertEqual(len(model.c), i + 1)
 
     def test_setitem(self):
         model = self.model
@@ -193,7 +193,7 @@ class _TestComponentListBase(object):
             cdata = model.c[0]
             self.assertEqual(id(cdata.parent_component()), id(model.c))
             del model.c[0]
-            self.assertEqual(len(model.c), len(index)-(i+1))
+            self.assertEqual(len(model.c), len(index) - (i + 1))
             self.assertEqual(cdata.parent_component(), None)
 
     def test_iter(self):
@@ -248,30 +248,30 @@ class _TestComponentListBase(object):
             self.assertEqual(model.c.index(cdata), i)
             self.assertEqual(model.c.index(cdata, start=i), i)
             with self.assertRaises(ValueError):
-                model.c.index(cdata, start=i+1)
+                model.c.index(cdata, start=i + 1)
             with self.assertRaises(ValueError):
                 model.c.index(cdata, start=i, stop=i)
             with self.assertRaises(ValueError):
                 model.c.index(cdata, stop=i)
-            self.assertEqual(model.c.index(cdata, start=i, stop=i+1), i)
+            self.assertEqual(model.c.index(cdata, start=i, stop=i + 1), i)
             with self.assertRaises(ValueError):
-                model.c.index(cdata, start=i+1, stop=i+1)
-            self.assertEqual(model.c.index(cdata, start=-len(index)+i), i)
+                model.c.index(cdata, start=i + 1, stop=i + 1)
+            self.assertEqual(model.c.index(cdata, start=-len(index) + i), i)
             if i == index[-1]:
-                self.assertEqual(model.c.index(cdata, start=-len(index)+i+1), i)
+                self.assertEqual(model.c.index(cdata, start=-len(index) + i + 1), i)
             else:
                 with self.assertRaises(ValueError):
-                    self.assertEqual(model.c.index(cdata, start=-len(index)+i+1), i)
+                    self.assertEqual(model.c.index(cdata, start=-len(index) + i + 1), i)
             if i == index[-1]:
                 with self.assertRaises(ValueError):
-                    self.assertEqual(model.c.index(cdata, stop=-len(index)+i+1), i)
+                    self.assertEqual(model.c.index(cdata, stop=-len(index) + i + 1), i)
             else:
-                self.assertEqual(model.c.index(cdata, stop=-len(index)+i+1), i)
+                self.assertEqual(model.c.index(cdata, stop=-len(index) + i + 1), i)
         tmp = self._cdatatype(self._arg())
         with self.assertRaises(ValueError):
             model.c.index(tmp)
         with self.assertRaises(ValueError):
-            model.c.index(tmp, stop=len(model.c)+1)
+            model.c.index(tmp, stop=len(model.c) + 1)
 
     def test_extend(self):
         model = self.model
@@ -284,8 +284,7 @@ class _TestComponentListBase(object):
             self.assertEqual(cdata.parent_component(), None)
         model.c.extend(c_more_list)
         for cdata in c_more_list:
-            self.assertEqual(id(cdata.parent_component()),
-                             id(model.c))
+            self.assertEqual(id(cdata.parent_component()), id(model.c))
 
     def test_count(self):
         model = self.model
@@ -310,19 +309,16 @@ class _TestComponentListBase(object):
         prefix = "c"
         for i in index:
             cdata = model.c[i]
-            self.assertEqual(cdata.local_name,
-                             cdata.name)
-            cname = prefix + "["+str(i)+"]"
-            self.assertEqual(cdata.local_name,
-                             cname)
+            self.assertEqual(cdata.local_name, cdata.name)
+            cname = prefix + "[" + str(i) + "]"
+            self.assertEqual(cdata.local_name, cname)
+
 
 class _TestActiveComponentListBase(_TestComponentListBase):
-
     def test_activate(self):
         model = self.model
         index = list(range(4))
-        model.c = self._ctype(self._cdatatype(self._arg())
-                              for i in index)
+        model.c = self._ctype(self._cdatatype(self._arg()) for i in index)
         self.assertEqual(len(model.c), len(index))
         self.assertEqual(model.c.active, True)
         model.c._active = False
@@ -337,8 +333,7 @@ class _TestActiveComponentListBase(_TestComponentListBase):
     def test_activate(self):
         model = self.model
         index = list(range(4))
-        model.c = self._ctype(self._cdatatype(self._arg())
-                              for i in index)
+        model.c = self._ctype(self._cdatatype(self._arg()) for i in index)
         self.assertEqual(len(model.c), len(index))
         self.assertEqual(model.c.active, True)
         for i in index:
@@ -367,44 +362,49 @@ class _TestActiveComponentListBase(_TestComponentListBase):
         self.assertEqual(model.c.active, True)
 
 
-class TestVarList(_TestComponentListBase,
-                  unittest.TestCase):
-    # Note: the updated _GeneralVarData class only takes an optional
+class TestVarList(_TestComponentListBase, unittest.TestCase):
+    # Note: the updated VarData class only takes an optional
     # parent argument (you no longer pass the domain in)
     _ctype = XVarList
-    _cdatatype = lambda self, arg: _GeneralVarData()
+    _cdatatype = lambda self, arg: VarData()
+
     def setUp(self):
         _TestComponentListBase.setUp(self)
         self._arg = lambda: Reals
 
-class TestExpressionList(_TestComponentListBase,
-                         unittest.TestCase):
+
+class TestExpressionList(_TestComponentListBase, unittest.TestCase):
     _ctype = XExpressionList
-    _cdatatype = _GeneralExpressionData
+    _cdatatype = ExpressionData
+
     def setUp(self):
         _TestComponentListBase.setUp(self)
         self._arg = lambda: self.model.x**3
+
 
 #
 # Test components that include activate/deactivate
 # functionality.
 #
 
-class TestConstraintList(_TestActiveComponentListBase,
-                         unittest.TestCase):
+
+class TestConstraintList(_TestActiveComponentListBase, unittest.TestCase):
     _ctype = XConstraintList
-    _cdatatype = _GeneralConstraintData
+    _cdatatype = ConstraintData
+
     def setUp(self):
         _TestComponentListBase.setUp(self)
         self._arg = lambda: self.model.x >= 1
 
-class TestObjectiveList(_TestActiveComponentListBase,
-                        unittest.TestCase):
+
+class TestObjectiveList(_TestActiveComponentListBase, unittest.TestCase):
     _ctype = XObjectiveList
-    _cdatatype = _GeneralObjectiveData
+    _cdatatype = ObjectiveData
+
     def setUp(self):
         _TestComponentListBase.setUp(self)
         self._arg = lambda: self.model.x**2
+
 
 if __name__ == "__main__":
     unittest.main()

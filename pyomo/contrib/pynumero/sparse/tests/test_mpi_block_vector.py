@@ -1,44 +1,46 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 import pyomo.common.unittest as unittest
 
+from pyomo.common.dependencies import mpi4py, mpi4py_available
 from pyomo.contrib.pynumero.dependencies import (
-    numpy_available, scipy_available, numpy as np
+    numpy_available,
+    scipy_available,
+    numpy as np,
 )
 
-SKIPTESTS=[]
+SKIPTESTS = []
 if numpy_available and scipy_available:
     from scipy.sparse import coo_matrix, bmat
 else:
-    SKIPTESTS.append(
-        "Pynumero needs scipy and numpy>=1.13.0 to run BlockMatrix tests"
-    )
+    SKIPTESTS.append("Pynumero needs scipy and numpy>=1.13.0 to run BlockMatrix tests")
 
-try:
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
+if mpi4py_available:
+    comm = mpi4py.MPI.COMM_WORLD
     if comm.Get_size() < 3:
         SKIPTESTS.append(
             "Pynumero needs at least 3 processes to run BlockVector MPI tests"
         )
-except ImportError:
+else:
     SKIPTESTS.append("Pynumero needs mpi4py to run BlockVector MPI tests")
 
 if not SKIPTESTS:
     from pyomo.contrib.pynumero.sparse import BlockVector
+    from pyomo.contrib.pynumero.sparse.base_block import (
+        vec_unary_ufuncs,
+        vec_binary_ufuncs,
+    )
     from pyomo.contrib.pynumero.sparse.mpi_block_vector import MPIBlockVector
 
 
-@unittest.category("mpi")
+@unittest.pytest.mark.mpi
 class TestMPIBlockVector(unittest.TestCase):
-
     # Because the setUpClass is called before decorators around the
     # class itself, we need to put the skipIf on the class setup and not
     # the class.
@@ -48,7 +50,7 @@ class TestMPIBlockVector(unittest.TestCase):
     def setUpClass(cls):
         # test problem 1
 
-        v1 = MPIBlockVector(4, [0,1,0,1], comm)
+        v1 = MPIBlockVector(4, [0, 1, 0, 1], comm)
 
         rank = comm.Get_rank()
         if rank == 0:
@@ -59,7 +61,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v1.set_block(3, np.ones(2))
 
         cls.v1 = v1
-        v2 = MPIBlockVector(7, [0,0,1,1,2,2,-1], comm)
+        v2 = MPIBlockVector(7, [0, 0, 1, 1, 2, 2, -1], comm)
 
         rank = comm.Get_rank()
         if rank == 0:
@@ -121,7 +123,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertFalse(self.v1.has_none)
 
     def test_any(self):
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3))
@@ -132,7 +134,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(self.v2.any())
 
     def test_all(self):
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3))
@@ -168,8 +170,37 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertEqual(self.v1.min(), 0.0)
         self.assertEqual(self.v2.min(), 0.0)
 
+    def test_min_max_with_size0_blocks(self):
+        v = MPIBlockVector(3, [0, 1, 2], comm)
+        rank = comm.Get_rank()
+        if rank == 0:
+            v.set_block(0, np.array([8, 4, 7, 12]))
+        if rank == 1:
+            v.set_block(1, np.array([]))
+        if rank == 2:
+            v.set_block(2, np.array([5, 6, 3]))
+        self.assertAlmostEqual(v.min(), 3)
+        self.assertAlmostEqual(v.max(), 12)
+
+        if rank == 0:
+            v.set_block(0, np.array([np.inf, np.inf, np.inf, np.inf]))
+        if rank == 2:
+            v.set_block(2, np.array([np.inf, np.inf, np.inf]))
+        self.assertEqual(v.min(), np.inf)
+        self.assertEqual(v.max(), np.inf)
+        v *= -1
+        self.assertEqual(v.min(), -np.inf)
+        self.assertEqual(v.max(), -np.inf)
+
+        v = MPIBlockVector(3, [0, 1, 2], comm)
+        v.set_block(rank, np.array([]))
+        with self.assertRaisesRegex(ValueError, 'cannot get the min of a size 0 array'):
+            v.min()
+        with self.assertRaisesRegex(ValueError, 'cannot get the max of a size 0 array'):
+            v.max()
+
     def test_max(self):
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3) + 10)
@@ -177,7 +208,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.arange(3))
         self.assertEqual(v.max(), 12.0)
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3) + 10)
@@ -189,7 +220,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertEqual(self.v2.max(), 3.0)
 
     def test_sum(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -249,18 +280,18 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(res.get_block(j), v.get_block(j).conjugate()))
 
     def test_nonzero(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
-            v.set_block(0, np.array([0,1,2]))
+            v.set_block(0, np.array([0, 1, 2]))
         if rank == 1:
-            v.set_block(1, np.array([0,0,2]))
+            v.set_block(1, np.array([0, 0, 2]))
         v.set_block(2, np.ones(3))
         res = v.nonzero()[0]
         self.assertTrue(isinstance(res, MPIBlockVector))
         self.assertEqual(res.nblocks, v.nblocks)
         if rank == 0:
-            self.assertTrue(np.allclose(res.get_block(0), np.array([1,2])))
+            self.assertTrue(np.allclose(res.get_block(0), np.array([1, 2])))
         if rank == 1:
             self.assertTrue(np.allclose(res.get_block(1), np.array([2])))
         self.assertTrue(np.allclose(res.get_block(2), np.arange(3)))
@@ -274,7 +305,7 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(res.get_block(3), np.arange(2)))
 
     def test_round(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3) + 0.01)
@@ -288,11 +319,11 @@ class TestMPIBlockVector(unittest.TestCase):
         if rank == 0:
             self.assertTrue(np.allclose(np.arange(3), res.get_block(0)))
         if rank == 1:
-            self.assertTrue(np.allclose(np.arange(3)+3, res.get_block(1)))
-        self.assertTrue(np.allclose(np.arange(3)+6, res.get_block(2)))
+            self.assertTrue(np.allclose(np.arange(3) + 3, res.get_block(1)))
+        self.assertTrue(np.allclose(np.arange(3) + 6, res.get_block(2)))
 
     def test_clip(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -304,19 +335,19 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(isinstance(res, MPIBlockVector))
         self.assertEqual(res.nblocks, v.nblocks)
         if rank == 0:
-            self.assertTrue(np.allclose(np.array([2,2,2]), res.get_block(0)))
+            self.assertTrue(np.allclose(np.array([2, 2, 2]), res.get_block(0)))
         if rank == 1:
-            self.assertTrue(np.allclose(np.arange(3)+3, res.get_block(1)))
-        self.assertTrue(np.allclose(np.arange(3)+6, res.get_block(2)))
+            self.assertTrue(np.allclose(np.arange(3) + 3, res.get_block(1)))
+        self.assertTrue(np.allclose(np.arange(3) + 6, res.get_block(2)))
 
         res = v.clip(min=2.0, max=5.0)
         self.assertTrue(isinstance(res, MPIBlockVector))
         self.assertEqual(res.nblocks, v.nblocks)
         if rank == 0:
-            self.assertTrue(np.allclose(np.array([2,2,2]), res.get_block(0)))
+            self.assertTrue(np.allclose(np.array([2, 2, 2]), res.get_block(0)))
         if rank == 1:
-            self.assertTrue(np.allclose(np.array([3,4,5]), res.get_block(1)))
-        self.assertTrue(np.allclose(np.array([5,5,5]), res.get_block(2)))
+            self.assertTrue(np.allclose(np.array([3, 4, 5]), res.get_block(1)))
+        self.assertTrue(np.allclose(np.array([5, 5, 5]), res.get_block(2)))
 
         v1 = self.v1
         res = v1.clip(max=0.5)
@@ -328,7 +359,6 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(np.ones(2) * 0.5, res.get_block(3)))
 
     def test_compress(self):
-
         v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
@@ -366,7 +396,7 @@ class TestMPIBlockVector(unittest.TestCase):
             res = v.compress(cond.flatten())
 
     def test_owned_blocks(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -388,7 +418,7 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(np.array([1, 3]), owned))
 
     def test_shared_blocks(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -400,7 +430,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.array([2]), shared))
 
     def test_clone(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -421,7 +451,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(vv.get_block(2), v.get_block(2)))
 
     def test_copy(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -479,13 +509,12 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.array([2]), v.shared_blocks))
 
         if rank == 0:
-            self.assertTrue(np.allclose(np.ones(3)*7.0, v.get_block(0)))
+            self.assertTrue(np.allclose(np.ones(3) * 7.0, v.get_block(0)))
         if rank == 1:
-            self.assertTrue(np.allclose(np.ones(4)*7.0, v.get_block(1)))
-        self.assertTrue(np.allclose(np.ones(2)*7.0, v.get_block(2)))
+            self.assertTrue(np.allclose(np.ones(4) * 7.0, v.get_block(1)))
+        self.assertTrue(np.allclose(np.ones(2) * 7.0, v.get_block(2)))
 
     def test_dot(self):
-
         v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
@@ -504,7 +533,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertAlmostEqual(expected, v.dot(vv.flatten()))
 
     def test_add(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -519,11 +548,11 @@ class TestMPIBlockVector(unittest.TestCase):
 
         if rank == 0:
             self.assertTrue(np.allclose(res.owned_blocks, v.owned_blocks))
-            self.assertTrue(np.allclose(np.arange(3)*2, res.get_block(0)))
+            self.assertTrue(np.allclose(np.arange(3) * 2, res.get_block(0)))
         if rank == 1:
             self.assertTrue(np.allclose(res.owned_blocks, v.owned_blocks))
-            self.assertTrue(np.allclose(np.arange(4)*2, res.get_block(1)))
-        self.assertTrue(np.allclose(np.arange(2)*2, res.get_block(2)))
+            self.assertTrue(np.allclose(np.arange(4) * 2, res.get_block(1)))
+        self.assertTrue(np.allclose(np.arange(2) * 2, res.get_block(2)))
 
         res = v + 5.0
         self.assertTrue(isinstance(res, MPIBlockVector))
@@ -552,7 +581,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.arange(2) + 5.0, res.get_block(2)))
 
     def test_sub(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -600,7 +629,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.arange(2) - 5.0, res.get_block(2)))
 
     def test_mul(self):
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -676,11 +705,11 @@ class TestMPIBlockVector(unittest.TestCase):
 
         if rank == 0:
             self.assertTrue(np.allclose(res.owned_blocks, v.owned_blocks))
-            self.assertTrue(np.allclose((np.arange(3) + 1.0)/2.0, res.get_block(0)))
+            self.assertTrue(np.allclose((np.arange(3) + 1.0) / 2.0, res.get_block(0)))
         if rank == 1:
             self.assertTrue(np.allclose(res.owned_blocks, v.owned_blocks))
-            self.assertTrue(np.allclose((np.arange(4) + 1.0)/2.0, res.get_block(1)))
-        self.assertTrue(np.allclose((np.arange(2) + 1.0)/2.0, res.get_block(2)))
+            self.assertTrue(np.allclose((np.arange(4) + 1.0) / 2.0, res.get_block(1)))
+        self.assertTrue(np.allclose((np.arange(2) + 1.0) / 2.0, res.get_block(2)))
 
         res = 2.0 / v
         self.assertTrue(isinstance(res, MPIBlockVector))
@@ -689,15 +718,14 @@ class TestMPIBlockVector(unittest.TestCase):
 
         if rank == 0:
             self.assertTrue(np.allclose(res.owned_blocks, v.owned_blocks))
-            self.assertTrue(np.allclose(2.0/(np.arange(3) + 1.0), res.get_block(0)))
+            self.assertTrue(np.allclose(2.0 / (np.arange(3) + 1.0), res.get_block(0)))
         if rank == 1:
             self.assertTrue(np.allclose(res.owned_blocks, v.owned_blocks))
-            self.assertTrue(np.allclose(2.0/(np.arange(4) + 1.0), res.get_block(1)))
-        self.assertTrue(np.allclose(2.0/(np.arange(2) + 1.0), res.get_block(2)))
+            self.assertTrue(np.allclose(2.0 / (np.arange(4) + 1.0), res.get_block(1)))
+        self.assertTrue(np.allclose(2.0 / (np.arange(2) + 1.0), res.get_block(2)))
 
     def test_floordiv(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3) + 1.0)
@@ -719,9 +747,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.ones(2), res.get_block(2)))
 
         bv = BlockVector(3)
-        bv.set_blocks([np.arange(3) + 1.0,
-                       np.arange(4) + 1.0,
-                       np.arange(2) + 1.0])
+        bv.set_blocks([np.arange(3) + 1.0, np.arange(4) + 1.0, np.arange(2) + 1.0])
 
         res1 = v // 2.0
         res2 = bv // 2.0
@@ -752,8 +778,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(res1.get_block(2), res2.get_block(2)))
 
     def test_isum(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -770,7 +795,7 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(np.arange(4) * 2.0, v.get_block(1)))
         self.assertTrue(np.allclose(np.arange(2) * 2.0, v.get_block(2)))
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -778,7 +803,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.arange(4))
         v.set_block(2, np.arange(2))
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3, dtype='d'))
@@ -796,8 +821,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.arange(2) + 7.0, v.get_block(2)))
 
     def test_isub(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -814,7 +838,7 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(np.zeros(4), v.get_block(1)))
         self.assertTrue(np.allclose(np.zeros(2), v.get_block(2)))
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -822,7 +846,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.arange(4))
         v.set_block(2, np.arange(2))
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3, dtype='d'))
@@ -840,8 +864,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.arange(2) - 7.0, v.get_block(2)))
 
     def test_imul(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -858,7 +881,7 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(np.arange(4) * np.arange(4), v.get_block(1)))
         self.assertTrue(np.allclose(np.arange(2) * np.arange(2), v.get_block(2)))
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))
@@ -866,7 +889,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.arange(4))
         v.set_block(2, np.arange(2))
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3, dtype='d'))
@@ -884,8 +907,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.arange(2) * 7.0, v.get_block(2)))
 
     def test_itruediv(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3) + 1.0)
@@ -902,7 +924,7 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertTrue(np.allclose(np.ones(4), v.get_block(1)))
         self.assertTrue(np.allclose(np.ones(2), v.get_block(2)))
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3) + 1.0)
@@ -910,7 +932,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.arange(4) + 1.0)
         v.set_block(2, np.arange(2) + 1.0)
 
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3, dtype='d'))
@@ -959,9 +981,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.ones(2, dtype=bool), res.get_block(2)))
 
         bv = BlockVector(3)
-        bv.set_blocks([np.ones(3) * 2,
-                       np.ones(4) * 8,
-                       np.ones(2) * 4])
+        bv.set_blocks([np.ones(3) * 2, np.ones(4) * 8, np.ones(2) * 4])
 
         with self.assertRaises(Exception) as context:
             res = v <= bv
@@ -1004,8 +1024,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.zeros(2, dtype=bool), res.get_block(2)))
 
     def test_lt(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 8)
@@ -1013,7 +1032,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.ones(4) * 2)
         v.set_block(2, np.ones(2) * 4)
 
-        v1 = MPIBlockVector(3, [0,1,-1], comm)
+        v1 = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v1.set_block(0, np.ones(3) * 2)
@@ -1036,9 +1055,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.zeros(2, dtype=bool), res.get_block(2)))
 
         bv = BlockVector(3)
-        bv.set_blocks([np.ones(3) * 2,
-                       np.ones(4) * 8,
-                       np.ones(2) * 4])
+        bv.set_blocks([np.ones(3) * 2, np.ones(4) * 8, np.ones(2) * 4])
 
         with self.assertRaises(Exception) as context:
             res = v < bv
@@ -1081,8 +1098,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.zeros(2, dtype=bool), res.get_block(2)))
 
     def test_ge(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 8)
@@ -1090,7 +1106,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.ones(4) * 2)
         v.set_block(2, np.ones(2) * 4)
 
-        v1 = MPIBlockVector(3, [0,1,-1], comm)
+        v1 = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v1.set_block(0, np.ones(3) * 2)
@@ -1113,9 +1129,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.ones(2, dtype=bool), res.get_block(2)))
 
         bv = BlockVector(3)
-        bv.set_blocks([np.ones(3) * 2,
-                       np.ones(4) * 8,
-                       np.ones(2) * 4])
+        bv.set_blocks([np.ones(3) * 2, np.ones(4) * 8, np.ones(2) * 4])
 
         with self.assertRaises(Exception) as context:
             res = v >= bv
@@ -1158,8 +1172,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.ones(2, dtype=bool), res.get_block(2)))
 
     def test_gt(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 8)
@@ -1167,7 +1180,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.ones(4) * 2)
         v.set_block(2, np.ones(2) * 4)
 
-        v1 = MPIBlockVector(3, [0,1,-1], comm)
+        v1 = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v1.set_block(0, np.ones(3) * 2)
@@ -1190,9 +1203,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.zeros(2, dtype=bool), res.get_block(2)))
 
         bv = BlockVector(3)
-        bv.set_blocks([np.ones(3) * 2,
-                       np.ones(4) * 8,
-                       np.ones(2) * 4])
+        bv.set_blocks([np.ones(3) * 2, np.ones(4) * 8, np.ones(2) * 4])
 
         with self.assertRaises(Exception) as context:
             res = v > bv
@@ -1235,8 +1246,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.ones(2, dtype=bool), res.get_block(2)))
 
     def test_eq(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 8)
@@ -1244,7 +1254,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.ones(4) * 2)
         v.set_block(2, np.ones(2) * 4)
 
-        v1 = MPIBlockVector(3, [0,1,-1], comm)
+        v1 = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v1.set_block(0, np.ones(3) * 2)
@@ -1267,9 +1277,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.ones(2, dtype=bool), res.get_block(2)))
 
         bv = BlockVector(3)
-        bv.set_blocks([np.ones(3) * 2,
-                       np.ones(4) * 8,
-                       np.ones(2) * 4])
+        bv.set_blocks([np.ones(3) * 2, np.ones(4) * 8, np.ones(2) * 4])
 
         with self.assertRaises(Exception) as context:
             res = v == bv
@@ -1312,8 +1320,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.zeros(2, dtype=bool), res.get_block(2)))
 
     def test_ne(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 8)
@@ -1321,7 +1328,7 @@ class TestMPIBlockVector(unittest.TestCase):
             v.set_block(1, np.ones(4) * 2)
         v.set_block(2, np.ones(2) * 4)
 
-        v1 = MPIBlockVector(3, [0,1,-1], comm)
+        v1 = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v1.set_block(0, np.ones(3) * 2)
@@ -1344,9 +1351,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.zeros(2, dtype=bool), res.get_block(2)))
 
         bv = BlockVector(3)
-        bv.set_blocks([np.ones(3) * 2,
-                       np.ones(4) * 8,
-                       np.ones(2) * 4])
+        bv.set_blocks([np.ones(3) * 2, np.ones(4) * 8, np.ones(2) * 4])
 
         with self.assertRaises(Exception) as context:
             res = v != bv
@@ -1386,8 +1391,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertTrue(np.allclose(np.ones(2, dtype=bool), res.get_block(2)))
 
     def test_unary_ufuncs(self):
-
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 0.5)
@@ -1400,19 +1404,13 @@ class TestMPIBlockVector(unittest.TestCase):
         bv.set_block(0, a)
         bv.set_block(1, b)
 
-        unary_funcs = [np.log10, np.sin, np.cos, np.exp, np.ceil,
-                       np.floor, np.tan, np.arctan, np.arcsin,
-                       np.arccos, np.sinh, np.cosh, np.abs,
-                       np.tanh, np.arcsinh, np.arctanh,
-                       np.fabs, np.sqrt, np.log, np.log2,
-                       np.absolute, np.isfinite, np.isinf, np.isnan,
-                       np.log1p, np.logical_not, np.exp2, np.expm1,
-                       np.sign, np.rint, np.square, np.positive,
-                       np.negative, np.rad2deg, np.deg2rad,
-                       np.conjugate, np.reciprocal]
+        _int_ufuncs = {np.invert, np.arccosh}
 
         bv2 = BlockVector(2)
-        for fun in unary_funcs:
+        for fun in vec_unary_ufuncs:
+            if fun in _int_ufuncs:
+                continue
+
             bv2.set_block(0, fun(bv.get_block(0)))
             bv2.set_block(1, fun(bv.get_block(1)))
             res = fun(v)
@@ -1422,7 +1420,7 @@ class TestMPIBlockVector(unittest.TestCase):
                 self.assertTrue(np.allclose(res.get_block(i), bv2.get_block(i)))
 
         with self.assertRaises(Exception) as context:
-            np.cbrt(v)
+            np.modf(v)
 
         with self.assertRaises(Exception) as context:
             np.cumsum(v)
@@ -1434,8 +1432,7 @@ class TestMPIBlockVector(unittest.TestCase):
             np.cumproduct(v)
 
     def test_reduce_ufuncs(self):
-
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 0.5)
@@ -1451,15 +1448,14 @@ class TestMPIBlockVector(unittest.TestCase):
             self.assertAlmostEqual(fun(v), fun(bv.flatten()))
 
     def test_binary_ufuncs(self):
-
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3) * 0.5)
         if rank == 1:
             v.set_block(1, np.ones(2) * 0.8)
 
-        v2 = MPIBlockVector(2, [0,1], comm)
+        v2 = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v2.set_block(0, np.ones(3) * 3.0)
@@ -1474,15 +1470,21 @@ class TestMPIBlockVector(unittest.TestCase):
         bv2.set_block(0, np.ones(3) * 3.0)
         bv2.set_block(1, np.ones(2) * 2.8)
 
-        binary_ufuncs = [np.add, np.multiply, np.divide, np.subtract,
-                         np.greater, np.greater_equal, np.less,
-                         np.less_equal, np.not_equal,
-                         np.maximum, np.minimum,
-                         np.fmax, np.fmin, np.equal,
-                         np.logaddexp, np.logaddexp2, np.remainder,
-                         np.heaviside, np.hypot]
+        _int_ufuncs = {
+            np.gcd,
+            np.lcm,
+            np.ldexp,
+            np.left_shift,
+            np.right_shift,
+            np.bitwise_and,
+            np.bitwise_or,
+            np.bitwise_xor,
+        }
 
-        for fun in binary_ufuncs:
+        for fun in vec_binary_ufuncs:
+            if fun in _int_ufuncs:
+                continue
+
             serial_res = fun(bv, bv2)
             res = fun(v, v2)
 
@@ -1515,15 +1517,14 @@ class TestMPIBlockVector(unittest.TestCase):
             for i in res.owned_blocks:
                 self.assertTrue(np.allclose(res.get_block(i), serial_res.get_block(i)))
 
-
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3, dtype=bool))
         if rank == 1:
             v.set_block(1, np.ones(2, dtype=bool))
 
-        v2 = MPIBlockVector(2, [0,1], comm)
+        v2 = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v2.set_block(0, np.zeros(3, dtype=bool))
@@ -1556,8 +1557,7 @@ class TestMPIBlockVector(unittest.TestCase):
                 res = fun(bv, v2)
 
     def test_contains(self):
-
-        v = MPIBlockVector(2, [0,1], comm)
+        v = MPIBlockVector(2, [0, 1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.ones(3))
@@ -1568,8 +1568,7 @@ class TestMPIBlockVector(unittest.TestCase):
         self.assertFalse(3 in v)
 
     def test_copyfrom(self):
-
-        v = MPIBlockVector(3, [0,1,-1], comm)
+        v = MPIBlockVector(3, [0, 1, -1], comm)
         rank = comm.Get_rank()
         if rank == 0:
             v.set_block(0, np.arange(3))

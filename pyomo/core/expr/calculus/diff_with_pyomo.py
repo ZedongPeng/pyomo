@@ -1,20 +1,18 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 from pyomo.common.collections import ComponentMap, ComponentSet
-from pyomo.core.expr import current as _expr
+import pyomo.core.expr as _expr
 from pyomo.core.expr.visitor import ExpressionValueVisitor, nonpyomo_leaf_types
-from pyomo.core.expr.numvalue import value
-from pyomo.core.expr.current import exp, log, sin, cos
+from pyomo.core.expr.numvalue import value, is_constant
+from pyomo.core.expr import exp, log, sin, cos
 import math
-
 
 """
 The purpose of this file is to perform symbolic differentiation and 
@@ -77,7 +75,7 @@ def _diff_PowExpression(node, val_dict, der_dict):
     der = der_dict[node]
     val1 = val_dict[arg1]
     val2 = val_dict[arg2]
-    der_dict[arg1] += der * val2 * val1**(val2 - 1)
+    der_dict[arg1] += der * val2 * val1 ** (val2 - 1)
     if arg2.__class__ not in nonpyomo_leaf_types:
         der_dict[arg2] += der * val1**val2 * log(val1)
 
@@ -95,8 +93,8 @@ def _diff_DivisionExpression(node, val_dict, der_dict):
     num = node.args[0]
     den = node.args[1]
     der = der_dict[node]
-    der_dict[num] += der * (1/val_dict[den])
-    der_dict[den] -= der * val_dict[num] / val_dict[den]**2
+    der_dict[num] += der * (1 / val_dict[den])
+    der_dict[den] -= der * val_dict[num] / val_dict[den] ** 2
 
 
 def _diff_NegationExpression(node, val_dict, der_dict):
@@ -201,7 +199,7 @@ def _diff_tan(node, val_dict, der_dict):
     assert len(node.args) == 1
     arg = node.args[0]
     der = der_dict[node]
-    der_dict[arg] += der / (cos(val_dict[arg])**2)
+    der_dict[arg] += der / (cos(val_dict[arg]) ** 2)
 
 
 def _diff_asin(node, val_dict, der_dict):
@@ -216,7 +214,7 @@ def _diff_asin(node, val_dict, der_dict):
     assert len(node.args) == 1
     arg = node.args[0]
     der = der_dict[node]
-    der_dict[arg] += der / (1 - val_dict[arg]**2)**0.5
+    der_dict[arg] += der / (1 - val_dict[arg] ** 2) ** 0.5
 
 
 def _diff_acos(node, val_dict, der_dict):
@@ -231,7 +229,7 @@ def _diff_acos(node, val_dict, der_dict):
     assert len(node.args) == 1
     arg = node.args[0]
     der = der_dict[node]
-    der_dict[arg] -= der / (1 - val_dict[arg]**2)**0.5
+    der_dict[arg] -= der / (1 - val_dict[arg] ** 2) ** 0.5
 
 
 def _diff_atan(node, val_dict, der_dict):
@@ -246,7 +244,7 @@ def _diff_atan(node, val_dict, der_dict):
     assert len(node.args) == 1
     arg = node.args[0]
     der = der_dict[node]
-    der_dict[arg] += der / (1 + val_dict[arg]**2)
+    der_dict[arg] += der / (1 + val_dict[arg] ** 2)
 
 
 def _diff_sqrt(node, val_dict, der_dict):
@@ -263,7 +261,27 @@ def _diff_sqrt(node, val_dict, der_dict):
     assert len(node.args) == 1
     arg = node.args[0]
     der = der_dict[node]
-    der_dict[arg] += der * 0.5 * val_dict[arg]**(-0.5)
+    der_dict[arg] += der * 0.5 * val_dict[arg] ** (-0.5)
+
+
+def _diff_abs(node, val_dict, der_dict):
+    """
+    Reverse automatic differentiation on the abs function.
+    This will raise an exception at 0.
+
+    Parameters
+    ----------
+    node: pyomo.core.expr.numeric_expr.UnaryFunctionExpression
+    val_dict: ComponentMap
+    der_dict: ComponentMap
+    """
+    assert len(node.args) == 1
+    arg = node.args[0]
+    der = der_dict[node]
+    val = val_dict[arg]
+    if is_constant(val) and val == 0:
+        raise DifferentiationException('Cannot differentiate abs(x) at x=0')
+    der_dict[arg] += der * val / abs(val)
 
 
 _unary_map = dict()
@@ -277,6 +295,7 @@ _unary_map['asin'] = _diff_asin
 _unary_map['acos'] = _diff_acos
 _unary_map['atan'] = _diff_atan
 _unary_map['sqrt'] = _diff_sqrt
+_unary_map['abs'] = _diff_abs
 
 
 def _diff_UnaryFunctionExpression(node, val_dict, der_dict):
@@ -291,7 +310,9 @@ def _diff_UnaryFunctionExpression(node, val_dict, der_dict):
     if node.getname() in _unary_map:
         _unary_map[node.getname()](node, val_dict, der_dict)
     else:
-        raise DifferentiationException('Unsupported expression type for differentiation: {0}'.format(type(node)))
+        raise DifferentiationException(
+            'Unsupported expression type for differentiation: {0}'.format(type(node))
+        )
 
 
 def _diff_GeneralExpression(node, val_dict, der_dict):
@@ -304,7 +325,7 @@ def _diff_GeneralExpression(node, val_dict, der_dict):
     val_dict: ComponentMap
     der_dict: ComponentMap
     """
-    der_dict[node.expr] += der_dict[node]
+    der_dict[node.arg(0)] += der_dict[node]
 
 
 def _diff_ExternalFunctionExpression(node, val_dict, der_dict):
@@ -312,13 +333,13 @@ def _diff_ExternalFunctionExpression(node, val_dict, der_dict):
 
     Parameters
     ----------
-    node: pyomo.core.expr.numeric_expr.ProductExpression
+    node: pyomo.core.expr.numeric_expr.ExternalFunctionExpression
     val_dict: ComponentMap
     der_dict: ComponentMap
     """
     der = der_dict[node]
     vals = tuple(val_dict[i] for i in node.args)
-    derivs = node._fcn.evaluate_fgh(vals)[1]
+    derivs = node._fcn.evaluate_fgh(vals, fgh=1)[1]
     for ndx, arg in enumerate(node.args):
         der_dict[arg] += der * derivs[ndx]
 
@@ -333,6 +354,7 @@ _diff_map[_expr.NegationExpression] = _diff_NegationExpression
 _diff_map[_expr.UnaryFunctionExpression] = _diff_UnaryFunctionExpression
 _diff_map[_expr.ExternalFunctionExpression] = _diff_ExternalFunctionExpression
 _diff_map[_expr.LinearExpression] = _diff_SumExpression
+_diff_map[_expr.AbsExpression] = _diff_abs
 
 _diff_map[_expr.NPV_ProductExpression] = _diff_ProductExpression
 _diff_map[_expr.NPV_DivisionExpression] = _diff_DivisionExpression
@@ -341,6 +363,7 @@ _diff_map[_expr.NPV_SumExpression] = _diff_SumExpression
 _diff_map[_expr.NPV_NegationExpression] = _diff_NegationExpression
 _diff_map[_expr.NPV_UnaryFunctionExpression] = _diff_UnaryFunctionExpression
 _diff_map[_expr.NPV_ExternalFunctionExpression] = _diff_ExternalFunctionExpression
+_diff_map[_expr.NPV_AbsExpression] = _diff_abs
 
 
 def _symbolic_value(x):
@@ -415,7 +438,9 @@ def _reverse_diff_helper(expr, numeric=True):
         elif e.is_named_expression_type():
             _diff_GeneralExpression(e, val_dict, der_dict)
         else:
-            raise DifferentiationException('Unsupported expression type for differentiation: {0}'.format(type(e)))
+            raise DifferentiationException(
+                'Unsupported expression type for differentiation: {0}'.format(type(e))
+            )
 
     return der_dict
 
@@ -426,7 +451,7 @@ def reverse_ad(expr):
 
     Parameters
     ----------
-    expr: pyomo.core.expr.numeric_expr.ExpressionBase
+    expr: pyomo.core.expr.numeric_expr.NumericExpression
         expression to differentiate
 
     Returns
@@ -444,7 +469,7 @@ def reverse_sd(expr):
 
     Parameters
     ----------
-    expr: pyomo.core.expr.numeric_expr.ExpressionBase
+    expr: pyomo.core.expr.numeric_expr.NumericExpression
         expression to differentiate
 
     Returns

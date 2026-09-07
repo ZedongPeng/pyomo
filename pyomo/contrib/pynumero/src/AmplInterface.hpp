@@ -1,12 +1,11 @@
-/**___________________________________________________________________________
+/**____________________________________________________________________________________
  *
  * Pyomo: Python Optimization Modeling Objects
- * Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
- * Under the terms of Contract DE-NA0003525 with National Technology and
- * Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
- * rights in this software.
- * This software is distributed under the 3-clause BSD License.
- * ___________________________________________________________________________
+ * Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+ * Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+ * Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+ * software.  This software is distributed under the 3-clause BSD License.
+ * ____________________________________________________________________________________
 **/
 #ifndef __AMPLINTERFACE_HPP__
 #define __AMPLINTERFACE_HPP__
@@ -65,7 +64,7 @@ public:
    // get the initial values for x
    void get_init_x(double *invec, int n);
 
-   // get the initia values for the multipliers lambda
+   // get the initial values for the multipliers lambda
    void get_init_multipliers(double *invec, int n);
 
    // evaluate the objective function
@@ -99,7 +98,7 @@ public:
 
    // write the solution to the .sol file
    // pass in the ampl_solve_status_num (this is the "solve_status_num" from
-   // the AMPL documentation. It should be interpretted as follows:
+   // the AMPL documentation. It should be interpreted as follows:
    //
    //   number   string       interpretation
    //   0 -  99   solved       optimal solution found
@@ -112,6 +111,8 @@ public:
    void finalize_solution(int ampl_solve_status_num, char* msg, 
                           double *const_x, int nx, double *const_lam, int nc);
 
+   // get the ASLdate that the interface was compiled against
+   long get_asl_date();
 private:
 
    // Make these private so the compiler does not give default implementations for them

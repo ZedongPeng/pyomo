@@ -1,16 +1,17 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and 
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain 
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 from pyomo.core.expr.symbol_map import SymbolMap
 
 from pyomo.core.base.label import TextLabeler
+
+
 def symbol_map_from_instance(instance):
     """
     Create a symbol map from an instance using name-based labelers.
@@ -23,7 +24,7 @@ def symbol_map_from_instance(instance):
     # Recursively iterate over all variables
     #
     for varvalue in instance.component_data_objects(Var, active=True):
-       symbol_map.getSymbol(varvalue, labeler)
+        symbol_map.getSymbol(varvalue, labeler)
     #
     # Recursively iterate over all constraints
     #

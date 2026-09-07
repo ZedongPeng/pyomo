@@ -1,18 +1,20 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import pyomo.common.unittest as unittest
 import pyomo.environ as pyo
 
 from pyomo.contrib.pynumero.dependencies import (
-    numpy as np, numpy_available, scipy, scipy_available
+    numpy as np,
+    numpy_available,
+    scipy,
+    scipy_available,
 )
 from pyomo.common.dependencies.scipy import sparse as spa
 
@@ -20,19 +22,20 @@ if not (numpy_available and scipy_available):
     raise unittest.SkipTest("Pynumero needs scipy and numpy to run NLP tests")
 
 from pyomo.contrib.pynumero.asl import AmplInterface
+
 if not AmplInterface.available():
     raise unittest.SkipTest(
-        "Pynumero needs the ASL extension to run CyIpoptSolver tests")
+        "Pynumero needs the ASL extension to run CyIpoptSolver tests"
+    )
 
 from pyomo.contrib.pynumero.interfaces.pyomo_nlp import PyomoNLP
 
-from pyomo.contrib.pynumero.algorithms.solvers.cyipopt_solver import (
-    cyipopt_available
-)
+from pyomo.contrib.pynumero.interfaces.cyipopt_interface import cyipopt_available
+
 if not cyipopt_available:
     raise unittest.SkipTest("Pynumero needs cyipopt to run CyIpoptSolver tests")
 
-from pyomo.contrib.pynumero.algorithms.solvers.cyipopt_solver import CyIpoptNLP
+from pyomo.contrib.pynumero.interfaces.cyipopt_interface import CyIpoptNLP
 
 
 def create_model1():
@@ -45,8 +48,8 @@ def create_model1():
     m.x[2].setlb(0.0)
     return m
 
-class TestCyIpoptNLP(unittest.TestCase):
 
+class TestCyIpoptNLP(unittest.TestCase):
     def test_model1_CyIpoptNLP(self):
         model = create_model1()
         nlp = PyomoNLP(model)
@@ -57,7 +60,7 @@ class TestCyIpoptNLP(unittest.TestCase):
         m = create_model1()
         m.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
 
-        m.scaling_factor[m.o] = 1e-6 # scale the objective
+        m.scaling_factor[m.o] = 1e-6  # scale the objective
         m.scaling_factor[m.c] = 2.0  # scale the equality constraint
         m.scaling_factor[m.d] = 3.0  # scale the inequality constraint
         m.scaling_factor[m.x[1]] = 4.0  # scale one of the x variables
@@ -79,7 +82,7 @@ class TestCyIpoptNLP(unittest.TestCase):
         m = create_model1()
         m.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
 
-        #m.scaling_factor[m.o] = 1e-6 # scale the objective
+        # m.scaling_factor[m.o] = 1e-6 # scale the objective
         m.scaling_factor[m.c] = 2.0  # scale the equality constraint
         m.scaling_factor[m.d] = 3.0  # scale the inequality constraint
         m.scaling_factor[m.x[1]] = 4.0  # scale the x variable
@@ -101,10 +104,10 @@ class TestCyIpoptNLP(unittest.TestCase):
         m = create_model1()
         m.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
 
-        m.scaling_factor[m.o] = 1e-6 # scale the objective
+        m.scaling_factor[m.o] = 1e-6  # scale the objective
         m.scaling_factor[m.c] = 2.0  # scale the equality constraint
         m.scaling_factor[m.d] = 3.0  # scale the inequality constraint
-        #m.scaling_factor[m.x] = 4.0  # scale the x variable
+        # m.scaling_factor[m.x] = 4.0  # scale the x variable
 
         cynlp = CyIpoptNLP(PyomoNLP(m))
         obj_scaling, x_scaling, g_scaling = cynlp.scaling_factors()
@@ -123,8 +126,8 @@ class TestCyIpoptNLP(unittest.TestCase):
         m = create_model1()
         m.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
 
-        m.scaling_factor[m.o] = 1e-6 # scale the objective
-        #m.scaling_factor[m.c] = 2.0  # scale the equality constraint
+        m.scaling_factor[m.o] = 1e-6  # scale the objective
+        # m.scaling_factor[m.c] = 2.0  # scale the equality constraint
         m.scaling_factor[m.d] = 3.0  # scale the inequality constraint
         m.scaling_factor[m.x[1]] = 4.0  # scale the x variable
 
@@ -143,18 +146,18 @@ class TestCyIpoptNLP(unittest.TestCase):
 
         # test missing all
         m = create_model1()
-        #m.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
-        #m.scaling_factor[m.o] = 1e-6 # scale the objective
-        #m.scaling_factor[m.c] = 2.0  # scale the equality constraint
-        #m.scaling_factor[m.d] = 3.0  # scale the inequality constraint
-        #m.scaling_factor[m.x] = 4.0  # scale the x variable
+        # m.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
+        # m.scaling_factor[m.o] = 1e-6 # scale the objective
+        # m.scaling_factor[m.c] = 2.0  # scale the equality constraint
+        # m.scaling_factor[m.d] = 3.0  # scale the inequality constraint
+        # m.scaling_factor[m.x] = 4.0  # scale the x variable
 
         cynlp = CyIpoptNLP(PyomoNLP(m))
         obj_scaling, x_scaling, g_scaling = cynlp.scaling_factors()
         self.assertTrue(obj_scaling is None)
         self.assertTrue(x_scaling is None)
         self.assertTrue(g_scaling is None)
-        
+
     def _check_model1(self, nlp, cynlp):
         # test x_init
         expected_xinit = np.asarray([4.0, 4.0, 4.0], dtype=np.float64)
@@ -204,14 +207,16 @@ class TestCyIpoptNLP(unittest.TestCase):
         # test constraints
         expected = np.asarray([20, -5], dtype=np.float64)
         constraints = cynlp.constraints(x)
-        self.assertTrue(np.allclose(expected, constraints)) 
-        
+        self.assertTrue(np.allclose(expected, constraints))
+
         # test jacobian
-        expected = np.asarray([[8.0, 0, 1.0],[0.0, 8.0, 1.0]])
+        expected = np.asarray([[8.0, 0, 1.0], [0.0, 8.0, 1.0]])
         spexpected = spa.coo_matrix(expected).todense()
         rows, cols = cynlp.jacobianstructure()
         values = cynlp.jacobian(x)
-        jac = spa.coo_matrix((values, (rows,cols)), shape=(len(constraints), len(x))).todense()
+        jac = spa.coo_matrix(
+            (values, (rows, cols)), shape=(len(constraints), len(x))
+        ).todense()
         self.assertTrue(np.allclose(spexpected, jac))
 
         # test hessian
@@ -219,6 +224,11 @@ class TestCyIpoptNLP(unittest.TestCase):
         y.fill(1.0)
         rows, cols = cynlp.hessianstructure()
         values = cynlp.hessian(x, y, obj_factor=1.0)
-        hess_lower = spa.coo_matrix((values, (rows,cols)), shape=(len(x), len(x))).todense()
-        expected_hess_lower = np.asarray([[-286.0, 0.0, 0.0], [0.0, 4.0, 0.0], [-144.0, 0.0, 192.0]], dtype=np.float64)
+        hess_lower = spa.coo_matrix(
+            (values, (rows, cols)), shape=(len(x), len(x))
+        ).todense()
+        expected_hess_lower = np.asarray(
+            [[-286.0, 0.0, 0.0], [0.0, 4.0, 0.0], [-144.0, 0.0, 192.0]],
+            dtype=np.float64,
+        )
         self.assertTrue(np.allclose(expected_hess_lower, hess_lower))

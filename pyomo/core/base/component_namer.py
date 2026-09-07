@@ -1,12 +1,11 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 import re
 
@@ -22,9 +21,10 @@ literals = '()[],.'
 special_chars = literals + '\'":\\'
 
 re_number = re.compile(
-    r'(?:[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|-?inf|nan)')
-re_special_char = re.compile(
-    r'[' + re.escape(special_chars) + ']')
+    r'(?:[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|-?inf|nan)'
+)
+re_special_char = re.compile(r'[' + re.escape(special_chars) + ']')
+
 
 def name_repr(x, unknown_handler=str):
     if not isinstance(x, str):
@@ -40,9 +40,14 @@ def name_repr(x, unknown_handler=str):
             return x
         return unquoted
 
+
 def tuple_repr(x, unknown_handler=str):
-    return '(' + ','.join(name_repr(_, unknown_handler) for _ in x) \
+    return (
+        '('
+        + ','.join(name_repr(_, unknown_handler) for _ in x)
         + (',)' if len(x) == 1 else ')')
+    )
+
 
 def index_repr(idx, unknown_handler=str):
     """
@@ -53,6 +58,7 @@ def index_repr(idx, unknown_handler=str):
     else:
         idx_str = name_repr(idx, unknown_handler)
     return "[" + idx_str + "]"
+
 
 _repr_map = {
     slice: lambda x: '*',

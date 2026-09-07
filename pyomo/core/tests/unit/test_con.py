@@ -1,12 +1,11 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 #
 # Unit Tests for Elements of a Model
 #
@@ -17,24 +16,38 @@
 import sys
 import os
 from os.path import abspath, dirname
-currdir = dirname(abspath(__file__))+os.sep
+
+currdir = dirname(abspath(__file__)) + os.sep
 
 import pyomo.common.unittest as unittest
 
-from pyomo.environ import ConcreteModel, AbstractModel, Var, Constraint, \
-    ConstraintList, Param, RangeSet, Set, Expression, value, \
-    simple_constraintlist_rule, simple_constraint_rule, inequality
-from pyomo.core.expr.current import (
-    SumExpression, EqualityExpression, InequalityExpression,
+from pyomo.environ import (
+    ConcreteModel,
+    AbstractModel,
+    Var,
+    Constraint,
+    ConstraintList,
+    Param,
+    RangeSet,
+    Set,
+    Expression,
+    value,
+    simple_constraintlist_rule,
+    simple_constraint_rule,
+    inequality,
+)
+from pyomo.common.log import LoggingIntercept
+from pyomo.core.expr import (
+    SumExpression,
+    EqualityExpression,
+    InequalityExpression,
     RangedExpression,
 )
-from pyomo.core.expr import logical_expr
-from pyomo.core.base.constraint import _GeneralConstraintData
+from pyomo.core.base.constraint import ConstraintData
 
 
 class TestConstraintCreation(unittest.TestCase):
-
-    def create_model(self,abstract=False):
+    def create_model(self, abstract=False):
         if abstract is True:
             model = AbstractModel()
         else:
@@ -46,119 +59,196 @@ class TestConstraintCreation(unittest.TestCase):
 
     def test_tuple_construct_equality(self):
         model = self.create_model()
+
         def rule(model):
             return (0.0, model.x)
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         True)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.x)
-        self.assertEqual(model.c.upper,             0)
+        self.assertEqual(model.c.equality, True)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.x)
+        self.assertEqual(model.c.upper, 0)
 
         model = self.create_model()
+
         def rule(model):
             return (model.x, 0.0)
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         True)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.x)
-        self.assertEqual(model.c.upper,             0)
+        self.assertEqual(model.c.equality, True)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.x)
+        self.assertEqual(model.c.upper, 0)
 
     def test_tuple_construct_inf_equality(self):
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return (model.x, float('inf'))
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model = self.create_model(abstract=True).create_instance()
 
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return (float('inf'), model.x)
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model.c = Constraint(expr=(model.x, float('inf')))
+        self.assertEqual(model.c.equality, True)
+        self.assertEqual(model.c.lower, float('inf'))
+        self.assertIs(model.c.body, model.x)
+        self.assertEqual(model.c.upper, float('inf'))
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'c' created with an invalid non-finite lower bound \(inf\).",
+        ):
+            model.c.lb
+        self.assertEqual(model.c.ub, None)
+
+        model.d = Constraint(expr=(float('inf'), model.x))
+        self.assertEqual(model.d.equality, True)
+        self.assertEqual(model.d.lower, float('inf'))
+        self.assertIs(model.d.body, model.x)
+        self.assertEqual(model.d.upper, float('inf'))
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'd' created with an invalid non-finite lower bound \(inf\).",
+        ):
+            model.d.lb
+        self.assertEqual(model.d.ub, None)
+
+        model.e = Constraint(expr=(model.x, float('-inf')))
+        self.assertEqual(model.e.equality, True)
+        self.assertEqual(model.e.lower, float('-inf'))
+        self.assertIs(model.e.body, model.x)
+        self.assertEqual(model.e.upper, float('-inf'))
+        self.assertEqual(model.e.lb, None)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'e' created with an invalid non-finite upper bound \(-inf\).",
+        ):
+            model.e.ub
+
+        model.f = Constraint(expr=(float('-inf'), model.x))
+        self.assertEqual(model.f.equality, True)
+        self.assertEqual(model.f.lower, float('-inf'))
+        self.assertIs(model.f.body, model.x)
+        self.assertEqual(model.f.upper, float('-inf'))
+        self.assertEqual(model.f.lb, None)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'f' created with an invalid non-finite upper bound \(-inf\).",
+        ):
+            model.f.ub
 
     def test_tuple_construct_1sided_inequality(self):
         model = self.create_model()
+
         def rule(model):
             return (None, model.y, 1)
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             1)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, None)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, 1)
 
         model = self.create_model()
+
         def rule(model):
             return (0, model.y, None)
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, None)
 
     def test_tuple_construct_1sided_inf_inequality(self):
         model = self.create_model()
+
         def rule(model):
             return (float('-inf'), model.y, 1)
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             1)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, float('-inf'))
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, 1)
+        self.assertEqual(model.c.lb, None)
+        self.assertEqual(model.c.ub, 1)
 
         model = self.create_model()
+
         def rule(model):
             return (0, model.y, float('inf'))
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, float('inf'))
+        self.assertEqual(model.c.lb, 0)
+        self.assertEqual(model.c.ub, None)
 
     def test_tuple_construct_unbounded_inequality(self):
         model = self.create_model()
+
+        # Note: inequality with only a single non-None returns the non-None value
+
         def rule(model):
             return (None, model.y, None)
-        model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' does not have a proper value. Found ScalarVar 'y'",
+        ):
+            model.c = Constraint(rule=rule)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' does not have a proper value. Found ScalarVar 'y'",
+        ):
+            model.c = (model.y, None, None)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' does not have a proper value. Found ScalarVar 'y'",
+        ):
+            model.c = (None, None, model.y)
 
         model = self.create_model()
+
         def rule(model):
             return (float('-inf'), model.y, float('inf'))
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, float('-inf'))
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, float('inf'))
+        self.assertEqual(model.c.lb, None)
+        self.assertEqual(model.c.ub, None)
 
     def test_tuple_construct_invalid_1sided_inequality(self):
         model = self.create_model(abstract=True)
+
         def rule(model):
             return (model.x, model.y, None)
+
         model.c = Constraint(rule=rule)
         # We now recognize this as a valid inequality
-        #self.assertRaises(ValueError, model.create_instance)
+        # self.assertRaises(ValueError, model.create_instance)
         instance = model.create_instance()
         self.assertEqual(instance.c.lower, None)
         self.assertIsInstance(instance.c.body, SumExpression)
         self.assertEqual(instance.c.upper, 0)
 
         model = self.create_model(abstract=True)
+
         def rule(model):
             return (None, model.y, model.z)
+
         model.c = Constraint(rule=rule)
         # We now recognize this as a valid inequality
-        #self.assertRaises(ValueError, model.create_instance)
+        # self.assertRaises(ValueError, model.create_instance)
         instance = model.create_instance()
         self.assertEqual(instance.c.lower, None)
         self.assertIsInstance(instance.c.body, SumExpression)
@@ -166,239 +256,340 @@ class TestConstraintCreation(unittest.TestCase):
 
     def test_tuple_construct_2sided_inequality(self):
         model = self.create_model()
+
         def rule(model):
             return (0, model.y, 1)
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             1)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, 1)
+
+        def rule(model):
+            return (float(0), model.y, float(0))
+
+        model.d = Constraint(rule=rule)
+
+        self.assertEqual(model.d.equality, True)
+        self.assertEqual(model.d.lower, 0)
+        self.assertIs(model.d.body, model.y)
+        self.assertEqual(model.d.upper, 0)
+
+        model.p = Param(mutable=True)
+        e = model.p * 2 + 1
+
+        def rule(model):
+            return (e, model.y, e)
+
+        model.e = Constraint(rule=rule)
+
+        self.assertEqual(model.e.equality, True)
+        self.assertIs(model.e.lower, e)
+        self.assertIs(model.e.body, model.y)
+        self.assertIs(model.e.upper, e)
+
+        #
+        # Note: because we do not test for symbolic equivalence, the
+        # following will be seen as a ranged inequality and not an
+        # equality:
+        #
+        def rule(model):
+            return (e, model.y, model.p * 2 + 1)
+
+        model.f = Constraint(rule=rule)
+
+        self.assertEqual(model.f.equality, False)
+        self.assertIs(model.f.lower, e)
+        self.assertIs(model.f.body, model.y)
+        self.assertIsNot(model.f.upper, e)
 
     def test_tuple_construct_invalid_2sided_inequality(self):
         model = self.create_model(abstract=True)
+
         def rule(model):
             return (model.x, model.y, 1)
+
         model.c = Constraint(rule=rule)
         instance = model.create_instance()
         with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' is a Ranged Inequality "
-                "with a variable lower bound"):
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
             instance.c.lower
         self.assertIs(instance.c.body, instance.y)
-        self.assertEqual(instance.c.upper, 1)
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
+            instance.c.upper
         instance.x.fix(3)
         self.assertEqual(value(instance.c.lower), 3)
 
         model = self.create_model(abstract=True)
+
         def rule(model):
             return (0, model.y, model.z)
+
         model.c = Constraint(rule=rule)
         instance = model.create_instance()
-        self.assertEqual(instance.c.lower, 0)
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
+            instance.c.lower
         self.assertIs(instance.c.body, instance.y)
         with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' is a Ranged Inequality "
-                "with a variable upper bound"):
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
             instance.c.upper
         instance.z.fix(3)
         self.assertEqual(value(instance.c.upper), 3)
 
     def test_expr_construct_equality(self):
         model = self.create_model()
+
         def rule(model):
             return 0.0 == model.x
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         True)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.x)
-        self.assertEqual(model.c.upper,             0)
+        self.assertEqual(model.c.equality, True)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.x)
+        self.assertEqual(model.c.upper, 0)
 
         model = self.create_model()
+
         def rule(model):
             return model.x == 0.0
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         True)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.x)
-        self.assertEqual(model.c.upper,             0)
+        self.assertEqual(model.c.equality, True)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.x)
+        self.assertEqual(model.c.upper, 0)
 
     def test_expr_construct_inf_equality(self):
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return model.x == float('inf')
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model = self.create_model(abstract=True).create_instance()
 
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return float('inf') == model.x
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model.c = Constraint(expr=model.x == float('inf'))
+        self.assertEqual(model.c.ub, None)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'c' created with an invalid non-finite lower bound \(inf\).",
+        ):
+            model.c.lb
+
+        model.d = Constraint(expr=model.x == float('-inf'))
+        self.assertEqual(model.d.lb, None)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'd' created with an invalid non-finite upper bound \(-inf\).",
+        ):
+            model.d.ub
 
     def test_expr_construct_1sided_inequality(self):
         model = self.create_model()
+
         def rule(model):
             return model.y <= 1
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             1)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, None)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, 1)
 
         model = self.create_model()
+
         def rule(model):
             return 0 <= model.y
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             0)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, 0)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, None)
 
         model = self.create_model()
+
         def rule(model):
             return model.y >= 1
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             1)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, 1)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, None)
 
         model = self.create_model()
+
         def rule(model):
             return 0 >= model.y
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             0)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, None)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, 0)
 
     def test_expr_construct_unbounded_inequality(self):
         model = self.create_model()
+
         def rule(model):
             return model.y <= float('inf')
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertIs(model.c.lower, None)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, float('inf'))
+        self.assertIs(model.c.ub, None)
+        self.assertIs(model.c.lb, None)
 
         model = self.create_model()
+
         def rule(model):
             return float('-inf') <= model.y
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, float('-inf'))
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, None)
+        self.assertIs(model.c.ub, None)
+        self.assertIs(model.c.lb, None)
 
         model = self.create_model()
+
         def rule(model):
             return model.y >= float('-inf')
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, float('-inf'))
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, None)
+        self.assertIs(model.c.ub, None)
+        self.assertIs(model.c.lb, None)
 
         model = self.create_model()
+
         def rule(model):
             return float('inf') >= model.y
+
         model.c = Constraint(rule=rule)
 
-        self.assertEqual(model.c.equality,         False)
-        self.assertEqual(model.c.lower,             None)
-        self.assertIs   (model.c.body,              model.y)
-        self.assertEqual(model.c.upper,             None)
+        self.assertEqual(model.c.equality, False)
+        self.assertEqual(model.c.lower, None)
+        self.assertIs(model.c.body, model.y)
+        self.assertEqual(model.c.upper, float('inf'))
+        self.assertIs(model.c.ub, None)
+        self.assertIs(model.c.lb, None)
 
     def test_expr_construct_invalid_unbounded_inequality(self):
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return model.y <= float('-inf')
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model = self.create_model(abstract=True).create_instance()
 
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return float('inf') <= model.y
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model.c = Constraint(expr=model.y <= float('-inf'))
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'c' created with an invalid non-finite upper bound \(-inf\).",
+        ):
+            model.c.ub
 
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return model.y >= float('inf')
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model.d = Constraint(expr=float('inf') <= model.y)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'd' created with an invalid non-finite lower bound \(inf\).",
+        ):
+            model.d.lb
 
-        model = self.create_model(abstract=True)
-        def rule(model):
-            return float('-inf') >= model.y
-        model.c = Constraint(rule=rule)
-        self.assertRaises(ValueError, model.create_instance)
+        model.e = Constraint(expr=model.y >= float('inf'))
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'e' created with an invalid non-finite lower bound \(inf\).",
+        ):
+            model.e.lb
+
+        model.f = Constraint(expr=float('-inf') >= model.y)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'f' created with an invalid non-finite upper bound \(-inf\).",
+        ):
+            model.f.ub
 
     def test_expr_construct_invalid(self):
         m = ConcreteModel()
         c = Constraint(rule=lambda m: None)
         self.assertRaisesRegex(
-            ValueError, ".*rule returned None",
-            m.add_component, 'c', c)
+            ValueError, ".*rule returned None", m.add_component, 'c', c
+        )
 
         m = ConcreteModel()
-        c = Constraint([1], rule=lambda m,i: None)
+        c = Constraint([1], rule=lambda m, i: None)
         self.assertRaisesRegex(
-            ValueError, ".*rule returned None",
-            m.add_component, 'c', c)
+            ValueError, ".*rule returned None", m.add_component, 'c', c
+        )
 
         m = ConcreteModel()
         c = Constraint(rule=lambda m: True)
         self.assertRaisesRegex(
             ValueError,
             r".*resolved to a trivial Boolean \(True\).*Constraint\.Feasible",
-            m.add_component, 'c', c)
+            m.add_component,
+            'c',
+            c,
+        )
 
         m = ConcreteModel()
-        c = Constraint([1], rule=lambda m,i: True)
+        c = Constraint([1], rule=lambda m, i: True)
         self.assertRaisesRegex(
             ValueError,
             r".*resolved to a trivial Boolean \(True\).*Constraint\.Feasible",
-            m.add_component, 'c', c)
+            m.add_component,
+            'c',
+            c,
+        )
 
         m = ConcreteModel()
         c = Constraint(rule=lambda m: False)
         self.assertRaisesRegex(
             ValueError,
-            r".*resolved to a trivial Boolean \(False\).*"
-            r"Constraint\.Infeasible",
-            m.add_component, 'c', c)
+            r".*resolved to a trivial Boolean \(False\).*" r"Constraint\.Infeasible",
+            m.add_component,
+            'c',
+            c,
+        )
 
         m = ConcreteModel()
-        c = Constraint([1], rule=lambda m,i: False)
+        c = Constraint([1], rule=lambda m, i: False)
         self.assertRaisesRegex(
             ValueError,
-            r".*resolved to a trivial Boolean \(False\).*"
-            r"Constraint\.Infeasible",
-            m.add_component, 'c', c)
+            r".*resolved to a trivial Boolean \(False\).*" r"Constraint\.Infeasible",
+            m.add_component,
+            'c',
+            c,
+        )
 
     def test_nondata_bounds(self):
         model = ConcreteModel()
         model.c = Constraint()
-        model.v = Var([1,2,3])
+        model.v = Var([1, 2, 3])
         model.e1 = Expression()
         model.e2 = Expression()
         model.e3 = Expression()
         model.c.set_value((model.e1, model.e2, model.e3))
-        self.assertIsNone(model.c._lower)
-        self.assertIsNone(model.c._body)
-        self.assertIsNone(model.c._upper)
         self.assertIs(model.c.lower, model.e1)
         self.assertIs(model.c.body, model.e2)
         self.assertIs(model.c.upper, model.e3)
@@ -412,13 +603,15 @@ class TestConstraintCreation(unittest.TestCase):
         model.e2 = model.v[2]
         model.e3 = model.v[3]
         with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' is a Ranged Inequality "
-                "with a variable lower bound"):
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
             model.c.lower
         self.assertIs(model.c.body.expr, model.v[2])
         with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' is a Ranged Inequality "
-                "with a variable upper bound"):
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
             model.c.upper
 
     # make sure we can use a mutable param that
@@ -447,7 +640,7 @@ class TestConstraintCreation(unittest.TestCase):
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
-        model.c = Constraint(expr=(model.p + 1)**2 <= model.x)
+        model.c = Constraint(expr=(model.p + 1) ** 2 <= model.x)
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
@@ -472,7 +665,7 @@ class TestConstraintCreation(unittest.TestCase):
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
-        model.c = Constraint(expr=model.x >= (model.p + 1)**2)
+        model.c = Constraint(expr=model.x >= (model.p + 1) ** 2)
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
@@ -519,7 +712,7 @@ class TestConstraintCreation(unittest.TestCase):
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
-        model.c = Constraint(expr=model.x <= (model.p + 1)**2)
+        model.c = Constraint(expr=model.x <= (model.p + 1) ** 2)
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
@@ -544,7 +737,7 @@ class TestConstraintCreation(unittest.TestCase):
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
-        model.c = Constraint(expr=(model.p + 1)**2 >= model.x)
+        model.c = Constraint(expr=(model.p + 1) ** 2 >= model.x)
         self.assertEqual(model.c.equality, False)
         model.del_component(model.c)
 
@@ -587,7 +780,7 @@ class TestConstraintCreation(unittest.TestCase):
         self.assertEqual(model.c.equality, True)
         model.del_component(model.c)
 
-        model.c = Constraint(expr=model.x + 1 == (model.p + 1)**2)
+        model.c = Constraint(expr=model.x + 1 == (model.p + 1) ** 2)
         self.assertEqual(model.c.equality, True)
         model.del_component(model.c)
 
@@ -595,13 +788,13 @@ class TestConstraintCreation(unittest.TestCase):
         self.assertEqual(model.c.equality, True)
         model.del_component(model.c)
 
-        model.c = Constraint(expr=inequality(model.p, model.x,  model.p))
+        model.c = Constraint(expr=inequality(model.p, model.x, model.p))
         self.assertTrue(model.c.upper is model.p)
         # GH: Not sure if we are supposed to detect equality
         #     in this situation. I would rather us not, for
         #     the sake of making the code less complicated.
         #     Either way, I am not going to test for it here.
-        #self.assertEqual(model.c.equality, <blah>)
+        # self.assertEqual(model.c.equality, <blah>)
         model.del_component(model.c)
 
         model.c = Constraint(expr=(model.x, model.p))
@@ -636,13 +829,12 @@ class TestConstraintCreation(unittest.TestCase):
 
 
 class TestSimpleCon(unittest.TestCase):
-
     def test_set_expr_explicit_multivariate(self):
         """Test expr= option (multivariate expression)"""
         model = ConcreteModel()
-        model.A = RangeSet(1,4)
+        model.A = RangeSet(1, 4)
         model.x = Var(model.A, initialize=2)
-        ans=0
+        ans = 0
         for i in model.A:
             ans = ans + model.x[i]
         ans = ans >= 0
@@ -674,7 +866,8 @@ class TestSimpleCon(unittest.TestCase):
         model.c = Constraint(expr=ans)
 
         with self.assertRaisesRegex(
-                ValueError, "No value for uninitialized NumericValue object x"):
+            ValueError, "No value for uninitialized ScalarVar object x"
+        ):
             value(model.c)
         model.x = 2
         self.assertEqual(model.c(), 2)
@@ -683,8 +876,8 @@ class TestSimpleCon(unittest.TestCase):
     def test_set_expr_inline(self):
         """Test expr= option (inline expression)"""
         model = ConcreteModel()
-        model.A = RangeSet(1,4)
-        model.x = Var(model.A,initialize=2)
+        model.A = RangeSet(1, 4)
+        model.x = Var(model.A, initialize=2)
         model.c = Constraint(expr=(0, sum(model.x[i] for i in model.A), 1))
 
         self.assertEqual(model.c(), 8)
@@ -693,14 +886,16 @@ class TestSimpleCon(unittest.TestCase):
     def test_rule1(self):
         """Test rule option"""
         model = ConcreteModel()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model):
-            ans=0
+            ans = 0
             for i in model.B:
                 ans = ans + model.x[i]
             ans = ans >= 0
             ans = ans <= 1
             return ans
+
         model.x = Var(model.B, initialize=2)
         model.c = Constraint(rule=f)
 
@@ -710,12 +905,14 @@ class TestSimpleCon(unittest.TestCase):
     def test_rule2(self):
         """Test rule option"""
         model = ConcreteModel()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model):
-            ans=0
+            ans = 0
             for i in model.B:
                 ans = ans + model.x[i]
             return (0, ans, 1)
+
         model.x = Var(model.B, initialize=2)
         model.c = Constraint(rule=f)
 
@@ -725,12 +922,14 @@ class TestSimpleCon(unittest.TestCase):
     def test_rule3(self):
         """Test rule option"""
         model = ConcreteModel()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model):
-            ans=0
+            ans = 0
             for i in model.B:
                 ans = ans + model.x[i]
             return (0, ans, None)
+
         model.x = Var(model.B, initialize=2)
         model.c = Constraint(rule=f)
 
@@ -740,12 +939,14 @@ class TestSimpleCon(unittest.TestCase):
     def test_rule4(self):
         """Test rule option"""
         model = ConcreteModel()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model):
-            ans=0
+            ans = 0
             for i in model.B:
                 ans = ans + model.x[i]
             return (None, ans, 1)
+
         model.x = Var(model.B, initialize=2)
         model.c = Constraint(rule=f)
 
@@ -755,12 +956,14 @@ class TestSimpleCon(unittest.TestCase):
     def test_rule5(self):
         """Test rule option"""
         model = ConcreteModel()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model):
-            ans=0
+            ans = 0
             for i in model.B:
                 ans = ans + model.x[i]
             return (ans, 1)
+
         model.x = Var(model.B, initialize=2)
         model.c = Constraint(rule=f)
 
@@ -772,14 +975,14 @@ class TestSimpleCon(unittest.TestCase):
         model = ConcreteModel()
         model.c = Constraint()
 
-        self.assertEqual(model.c.dim(),0)
+        self.assertEqual(model.c.dim(), 0)
 
     def test_keys_empty(self):
         """Test keys method"""
         model = ConcreteModel()
         model.c = Constraint()
 
-        self.assertEqual(list(model.c.keys()),[])
+        self.assertEqual(list(model.c.keys()), [])
 
     def test_len_empty(self):
         """Test len method"""
@@ -793,17 +996,17 @@ class TestSimpleCon(unittest.TestCase):
         model = ConcreteModel()
         model.x = Var()
         model.c = Constraint(expr=model.x == 1)
-        self.assertEqual(list(model.c.keys()),[None])
-        self.assertEqual(id(model.c),id(model.c[None]))
+        self.assertEqual(list(model.c.keys()), [None])
+        self.assertEqual(id(model.c), id(model.c[None]))
 
     def test_len(self):
         """Test len method"""
         model = AbstractModel()
         model.x = Var()
         model.c = Constraint(rule=lambda m: m.x == 1)
-        self.assertEqual(len(model.c),0)
+        self.assertEqual(len(model.c), 0)
         inst = model.create_instance()
-        self.assertEqual(len(inst.c),1)
+        self.assertEqual(len(inst.c), 1)
 
     def test_setitem(self):
         m = ConcreteModel()
@@ -819,26 +1022,28 @@ class TestSimpleCon(unittest.TestCase):
         m.c = Constraint.Skip
         self.assertEqual(len(m.c), 0)
 
-class TestArrayCon(unittest.TestCase):
 
+class TestArrayCon(unittest.TestCase):
     def create_model(self):
         model = ConcreteModel()
-        model.A = Set(initialize=[1,2,3,4])
+        model.A = Set(initialize=[1, 2, 3, 4])
         return model
 
     def test_rule_option1(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model, i):
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
-        model.c = Constraint(model.A,rule=f)
+        model.c = Constraint(model.A, rule=f)
 
         self.assertEqual(model.c[1](), 8)
         self.assertEqual(model.c[2](), 16)
@@ -846,78 +1051,86 @@ class TestArrayCon(unittest.TestCase):
 
     def test_rule_option2(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model, i):
-            if i%2 == 0:
+            if i % 2 == 0:
                 return Constraint.Skip
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
-        model.c = Constraint(model.A,rule=f)
+        model.c = Constraint(model.A, rule=f)
 
         self.assertEqual(model.c[1](), 8)
         self.assertEqual(len(model.c), 2)
 
     def test_rule_option3(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model, i):
-            if i%2 == 0:
+            if i % 2 == 0:
                 return Constraint.Skip
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
-        model.c = Constraint(model.A,rule=f)
+        model.c = Constraint(model.A, rule=f)
 
         self.assertEqual(model.c[1](), 8)
         self.assertEqual(len(model.c), 2)
 
     def test_rule_option2a(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         @simple_constraint_rule
         def f(model, i):
-            if i%2 == 0:
+            if i % 2 == 0:
                 return None
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
-        model.c = Constraint(model.A,rule=f)
+        model.c = Constraint(model.A, rule=f)
 
         self.assertEqual(model.c[1](), 8)
         self.assertEqual(len(model.c), 2)
 
     def test_rule_option3a(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         @simple_constraint_rule
         def f(model, i):
-            if i%2 == 0:
+            if i % 2 == 0:
                 return None
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
-        model.c = Constraint(model.A,rule=f)
+        model.c = Constraint(model.A, rule=f)
 
         self.assertEqual(model.c[1](), 8)
         self.assertEqual(len(model.c), 2)
@@ -926,32 +1139,34 @@ class TestArrayCon(unittest.TestCase):
         model = self.create_model()
         model.c = Constraint(model.A)
 
-        self.assertEqual(model.c.dim(),1)
+        self.assertEqual(model.c.dim(), 1)
 
     def test_keys(self):
         model = self.create_model()
         model.c = Constraint(model.A)
 
-        self.assertEqual(len(list(model.c.keys())),0)
+        self.assertEqual(len(list(model.c.keys())), 0)
 
     def test_len(self):
         model = self.create_model()
         model.c = Constraint(model.A)
-        self.assertEqual(len(model.c),0)
+        self.assertEqual(len(model.c), 0)
 
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
         """Test rule option"""
+
         def f(model):
-            ans=0
+            ans = 0
             for i in model.B:
                 ans = ans + model.x[i]
-            ans = ans==2
+            ans = ans == 2
             return ans
+
         model.x = Var(model.B, initialize=2)
         model.c = Constraint(rule=f)
 
-        self.assertEqual(len(model.c),1)
+        self.assertEqual(len(model.c), 1)
 
     def test_setitem(self):
         m = ConcreteModel()
@@ -962,25 +1177,26 @@ class TestArrayCon(unittest.TestCase):
         m.c[2] = m.x**2 <= 4
         self.assertEqual(len(m.c), 1)
         self.assertEqual(list(m.c.keys()), [2])
-        self.assertIsInstance(m.c[2], _GeneralConstraintData)
+        self.assertIsInstance(m.c[2], ConstraintData)
         self.assertEqual(m.c[2].upper, 4)
 
         m.c[3] = Constraint.Skip
         self.assertEqual(len(m.c), 1)
-        self.assertRaisesRegex( KeyError, "3", m.c.__getitem__, 3)
+        self.assertRaisesRegex(KeyError, "3", m.c.__getitem__, 3)
 
-        self.assertRaisesRegex( ValueError, r"'c\[3\]': rule returned None",
-                                 m.c.__setitem__, 3, None)
+        self.assertRaisesRegex(
+            ValueError, r"'c\[3\]': rule returned None", m.c.__setitem__, 3, None
+        )
         self.assertEqual(len(m.c), 1)
 
         m.c[2] = Constraint.Skip
         self.assertEqual(len(m.c), 0)
 
-class TestConList(unittest.TestCase):
 
+class TestConList(unittest.TestCase):
     def create_model(self):
         model = ConcreteModel()
-        model.A = Set(initialize=[1,2,3,4])
+        model.A = Set(initialize=[1, 2, 3, 4])
         return model
 
     #
@@ -1003,17 +1219,19 @@ class TestConList(unittest.TestCase):
 
     def test_rule_option1(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model, i):
             if i > 4:
                 return ConstraintList.End
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
         model.c = ConstraintList(rule=f)
 
@@ -1023,18 +1241,20 @@ class TestConList(unittest.TestCase):
 
     def test_rule_option2(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model, i):
             if i > 2:
                 return ConstraintList.End
-            i = 2*i - 1
-            ans=0
+            i = 2 * i - 1
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
         model.c = ConstraintList(rule=f)
 
@@ -1043,18 +1263,20 @@ class TestConList(unittest.TestCase):
 
     def test_rule_option1a(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         @simple_constraintlist_rule
         def f(model, i):
             if i > 4:
                 return None
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
         model.c = ConstraintList(rule=f)
 
@@ -1064,19 +1286,21 @@ class TestConList(unittest.TestCase):
 
     def test_rule_option2a(self):
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         @simple_constraintlist_rule
         def f(model, i):
             if i > 2:
                 return None
-            i = 2*i - 1
-            ans=0
+            i = 2 * i - 1
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
+
         model.x = Var(model.B, initialize=2)
         model.c = ConstraintList(rule=f)
 
@@ -1086,11 +1310,13 @@ class TestConList(unittest.TestCase):
     def test_rule_option3(self):
         model = self.create_model()
         model.y = Var(initialize=2)
+
         def f(model):
             yield model.y <= 0
-            yield 2*model.y <= 0
-            yield 2*model.y <= 0
+            yield 2 * model.y <= 0
+            yield 2 * model.y <= 0
             yield ConstraintList.End
+
         model.c = ConstraintList(rule=f)
         self.assertEqual(len(model.c), 3)
         self.assertEqual(model.c[1](), 2)
@@ -1101,7 +1327,7 @@ class TestConList(unittest.TestCase):
     def test_rule_option4(self):
         model = self.create_model()
         model.y = Var(initialize=2)
-        model.c = ConstraintList(rule=((i+1)*model.y >= 0 for i in range(3)))
+        model.c = ConstraintList(rule=((i + 1) * model.y >= 0 for i in range(3)))
         self.assertEqual(len(model.c), 3)
         self.assertEqual(model.c[1](), 2)
 
@@ -1109,19 +1335,19 @@ class TestConList(unittest.TestCase):
         model = self.create_model()
         model.c = ConstraintList()
 
-        self.assertEqual(model.c.dim(),1)
+        self.assertEqual(model.c.dim(), 1)
 
     def test_keys(self):
         model = self.create_model()
         model.c = ConstraintList()
 
-        self.assertEqual(len(list(model.c.keys())),0)
+        self.assertEqual(len(list(model.c.keys())), 0)
 
     def test_len(self):
         model = self.create_model()
         model.c = ConstraintList()
 
-        self.assertEqual(len(model.c),0)
+        self.assertEqual(len(model.c), 0)
 
     def test_0based_add(self):
         m = ConcreteModel()
@@ -1132,92 +1358,126 @@ class TestConList(unittest.TestCase):
         m.c.add(m.x >= 0)
         self.assertEqual(list(m.c.keys()), [0, 1])
 
-class Test2DArrayCon(unittest.TestCase):
 
+class Test2DArrayCon(unittest.TestCase):
     def create_model(self):
         model = ConcreteModel()
-        model.A = Set(initialize=[1,2])
+        model.A = Set(initialize=[1, 2])
         return model
 
     def test_rule_option(self):
         """Test rule option"""
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
+
         def f(model, i, j):
-            ans=0
+            ans = 0
             for j in model.B:
                 ans = ans + model.x[j]
             ans *= i
             ans = ans <= 0
             ans = ans >= 0
             return ans
-        model.x = Var(model.B, initialize=2)
-        model.c = Constraint(model.A,model.A,rule=f)
 
-        self.assertEqual(model.c[1,1](), 8)
-        self.assertEqual(model.c[2,1](), 16)
+        model.x = Var(model.B, initialize=2)
+        model.c = Constraint(model.A, model.A, rule=f)
+
+        self.assertEqual(model.c[1, 1](), 8)
+        self.assertEqual(model.c[2, 1](), 16)
 
     def test_dim(self):
         """Test dim method"""
         model = self.create_model()
-        model.c = Constraint(model.A,model.A)
+        model.c = Constraint(model.A, model.A)
 
-        self.assertEqual(model.c.dim(),2)
+        self.assertEqual(model.c.dim(), 2)
 
     def test_keys(self):
         """Test keys method"""
         model = self.create_model()
-        model.c = Constraint(model.A,model.A)
+        model.c = Constraint(model.A, model.A)
 
-        self.assertEqual(len(list(model.c.keys())),0)
+        self.assertEqual(len(list(model.c.keys())), 0)
 
     def test_len(self):
         """Test len method"""
         model = self.create_model()
-        model.c = Constraint(model.A,model.A)
-        self.assertEqual(len(model.c),0)
+        model.c = Constraint(model.A, model.A)
+        self.assertEqual(len(model.c), 0)
 
         model = self.create_model()
-        model.B = RangeSet(1,4)
+        model.B = RangeSet(1, 4)
         """Test rule option"""
+
         def f(model):
-            ans=0
+            ans = 0
             for i in model.B:
                 ans = ans + model.x[i]
-            ans = ans==2
+            ans = ans == 2
             return ans
+
         model.x = Var(model.B, initialize=2)
         model.c = Constraint(rule=f)
 
-        self.assertEqual(len(model.c),1)
+        self.assertEqual(len(model.c), 1)
+
 
 class MiscConTests(unittest.TestCase):
-
     def test_infeasible(self):
         m = ConcreteModel()
-        with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' is always infeasible"):
-            m.c = Constraint(expr=Constraint.Infeasible)
-        self.assertEqual(m.c._data, {})
+        m.x = Var()
+        m.c = Constraint(expr=Constraint.Infeasible)
+        self.assertIn(None, m.c._data)
+        self.assertEqual(m.c.lb, None)
+        self.assertEqual(m.c.body, 1)
+        self.assertEqual(m.c.ub, 0)
 
         with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' is always infeasible"):
-            m.c = Constraint.Infeasible
-        self.assertEqual(m.c._data, {})
-        self.assertIsNone(m.c.expr)
+            ValueError,
+            "Invalid constraint expression. The constraint expression resolved "
+            r"to a trivial Boolean \(True\) instead of a Pyomo object.",
+        ):
+            m.c = (0, 1, 2)
 
-        m.c = (0, 1, 2)
+        m.c = (0, m.x, 2)
         self.assertIn(None, m.c._data)
         self.assertEqual(m.c.lb, 0)
+        self.assertEqual(m.c.body, m.x)
         self.assertEqual(m.c.ub, 2)
 
-        with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' is always infeasible"):
-            m.c = Constraint.Infeasible
-        self.assertEqual(m.c._data, {})
-        self.assertIsNone(m.c.expr)
+        m.c = Constraint.Infeasible
+        self.assertIn(None, m.c._data)
         self.assertEqual(m.c.lb, None)
-        self.assertEqual(m.c.ub, None)
+        self.assertEqual(m.c.body, 1)
+        self.assertEqual(m.c.ub, 0)
+
+    def test_feasible(self):
+        m = ConcreteModel()
+        m.x = Var()
+        m.c = Constraint(expr=Constraint.Feasible)
+        self.assertIn(None, m.c._data)
+        self.assertEqual(m.c.lb, None)
+        self.assertEqual(m.c.body, 0)
+        self.assertEqual(m.c.ub, 0)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Invalid constraint expression. The constraint expression resolved "
+            r"to a trivial Boolean \(True\) instead of a Pyomo object.",
+        ):
+            m.c = (0, 1, 2)
+
+        m.c = (0, m.x, 2)
+        self.assertIn(None, m.c._data)
+        self.assertEqual(m.c.lb, 0)
+        self.assertEqual(m.c.body, m.x)
+        self.assertEqual(m.c.ub, 2)
+
+        m.c = Constraint.Feasible
+        self.assertIn(None, m.c._data)
+        self.assertEqual(m.c.lb, None)
+        self.assertEqual(m.c.body, 0)
+        self.assertEqual(m.c.ub, 0)
 
     def test_slack_methods(self):
         model = ConcreteModel()
@@ -1247,15 +1507,15 @@ class MiscConTests(unittest.TestCase):
             pass
 
     def test_contains(self):
-        model=ConcreteModel()
-        model.a=Set(initialize=[1,2,3])
-        model.b=Constraint(model.a)
+        model = ConcreteModel()
+        model.a = Set(initialize=[1, 2, 3])
+        model.b = Constraint(model.a)
 
-        self.assertEqual(2 in model.b,False)
-        tmp=[]
+        self.assertEqual(2 in model.b, False)
+        tmp = []
         for i in model.b:
             tmp.append(i)
-        self.assertEqual(len(tmp),0)
+        self.assertEqual(len(tmp), 0)
 
     def test_empty_singleton(self):
         a = Constraint()
@@ -1264,7 +1524,7 @@ class MiscConTests(unittest.TestCase):
         # Even though we construct a ScalarConstraint,
         # if it is not initialized that means it is "empty"
         # and we should encounter errors when trying to access the
-        # _ConstraintData interface methods until we assign
+        # ConstraintData interface methods until we assign
         # something to the constraint.
         #
         self.assertEqual(a._constructed, True)
@@ -1321,32 +1581,46 @@ class MiscConTests(unittest.TestCase):
         self.assertEqual(a._constructed, False)
         self.assertEqual(len(a), 0)
         with self.assertRaisesRegex(
-                RuntimeError, "Cannot access .* on AbstractScalarConstraint"
-                ".*before it has been constructed"):
+            RuntimeError,
+            "Cannot access .* on AbstractScalarConstraint"
+            ".*before it has been constructed",
+        ):
             a()
         with self.assertRaisesRegex(
-                RuntimeError, "Cannot access .* on AbstractScalarConstraint"
-                ".*before it has been constructed"):
+            RuntimeError,
+            "Cannot access .* on AbstractScalarConstraint"
+            ".*before it has been constructed",
+        ):
             a.body
         with self.assertRaisesRegex(
-                RuntimeError, "Cannot access .* on AbstractScalarConstraint"
-                ".*before it has been constructed"):
+            RuntimeError,
+            "Cannot access .* on AbstractScalarConstraint"
+            ".*before it has been constructed",
+        ):
             a.lower
         with self.assertRaisesRegex(
-                RuntimeError, "Cannot access .* on AbstractScalarConstraint"
-                ".*before it has been constructed"):
+            RuntimeError,
+            "Cannot access .* on AbstractScalarConstraint"
+            ".*before it has been constructed",
+        ):
             a.upper
         with self.assertRaisesRegex(
-                RuntimeError, "Cannot access .* on AbstractScalarConstraint"
-                ".*before it has been constructed"):
+            RuntimeError,
+            "Cannot access .* on AbstractScalarConstraint"
+            ".*before it has been constructed",
+        ):
             a.equality
         with self.assertRaisesRegex(
-                RuntimeError, "Cannot access .* on AbstractScalarConstraint"
-                ".*before it has been constructed"):
+            RuntimeError,
+            "Cannot access .* on AbstractScalarConstraint"
+            ".*before it has been constructed",
+        ):
             a.strict_lower
         with self.assertRaisesRegex(
-                RuntimeError, "Cannot access .* on AbstractScalarConstraint"
-                ".*before it has been constructed"):
+            RuntimeError,
+            "Cannot access .* on AbstractScalarConstraint"
+            ".*before it has been constructed",
+        ):
             a.strict_upper
 
         x = Var(initialize=1.0)
@@ -1362,36 +1636,62 @@ class MiscConTests(unittest.TestCase):
         self.assertEqual(a.strict_lower, False)
         self.assertEqual(a.strict_upper, False)
 
+    def test_deprecated_rule_attribute(self):
+        def rule(m):
+            return m.x <= 0
+
+        def new_rule(m):
+            return m.x >= 0
+
+        m = ConcreteModel()
+        m.x = Var()
+        m.con = Constraint(rule=rule)
+
+        self.assertIs(m.con.rule._fcn, rule)
+        with LoggingIntercept() as LOG:
+            m.con.rule = new_rule
+        self.assertIn(
+            "DEPRECATED: The 'Constraint.rule' attribute will be made read-only",
+            LOG.getvalue(),
+        )
+        self.assertIs(m.con.rule, new_rule)
+
     def test_rule(self):
         def rule1(model):
             return Constraint.Skip
+
         model = ConcreteModel()
         try:
             model.o = Constraint(rule=rule1)
         except Exception:
             e = sys.exc_info()[1]
             self.fail("Failure to create empty constraint: %s" % str(e))
+
         #
         def rule1(model):
-            return (0.0,model.x,2.0)
+            return (0.0, model.x, 2.0)
+
         model = ConcreteModel()
         model.x = Var(initialize=1.1)
         model.o = Constraint(rule=rule1)
 
-        self.assertEqual(model.o(),1.1)
+        self.assertEqual(model.o(), 1.1)
+
         #
         def rule1(model, i):
             return Constraint.Skip
+
         model = ConcreteModel()
-        model.a = Set(initialize=[1,2,3])
+        model.a = Set(initialize=[1, 2, 3])
         try:
-            model.o = Constraint(model.a,rule=rule1)
+            model.o = Constraint(model.a, rule=rule1)
         except Exception:
             self.fail("Error generating empty constraint")
 
         #
         def rule1(model):
-            return (0.0,1.1,2.0,None)
+            return (0.0, 1.1, 2.0, None)
+
         model = ConcreteModel()
         try:
             model.o = Constraint(rule=rule1)
@@ -1399,9 +1699,20 @@ class MiscConTests(unittest.TestCase):
         except ValueError:
             pass
 
+    def test_rule_kwargs(self):
+        m = ConcreteModel()
+        m.x = Var()
+
+        @m.Constraint(rhs=5)
+        def c(m, *, rhs):
+            return m.x <= rhs
+
+        self.assertExpressionsEqual(m.c.expr, m.x <= 5)
+
     def test_tuple_constraint_create(self):
         def rule1(model):
-            return (0.0,model.x)
+            return (0.0, model.x)
+
         model = ConcreteModel()
         model.x = Var()
         model.y = Var()
@@ -1410,23 +1721,49 @@ class MiscConTests(unittest.TestCase):
         self.assertEqual(model.c.lower, 0)
         self.assertIs(model.c.body, model.x)
         self.assertEqual(model.c.upper, 0)
+
         #
         def rule1(model):
-            return (model.y,model.x,model.z)
+            return (model.y, model.x, model.z)
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.z = Var()
         model.c = Constraint(rule=rule1)
         instance = model.create_instance()
-        with self.assertRaisesRegex(ValueError, "Constraint 'c' is a Ranged "
-                                    "Inequality with a variable lower bound"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
             instance.c.lower
         self.assertIs(instance.c.body, instance.x)
-        with self.assertRaisesRegex(ValueError, "Constraint 'c' is a Ranged "
-                                    "Inequality with a variable upper bound"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
             instance.c.upper
+
         #
+        def rule1(model):
+            return (0, model.x, model.z)
+
+        model = AbstractModel()
+        model.x = Var()
+        model.z = Var()
+        model.c = Constraint(rule=rule1)
+        instance = model.create_instance()
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
+            instance.c.lower
+        self.assertIs(instance.c.body, instance.x)
+        with self.assertRaisesRegex(
+            ValueError,
+            "Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
+            instance.c.upper
 
     def test_expression_constructor_coverage(self):
         def rule1(model):
@@ -1434,17 +1771,20 @@ class MiscConTests(unittest.TestCase):
             expr = expr == 0.0
             expr = expr >= 1.0
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.z = Var()
         model.o = Constraint(rule=rule1)
         self.assertRaises(TypeError, model.create_instance)
+
         #
         def rule1(model):
             expr = model.U >= model.x
             expr = expr >= model.L
             return expr
+
         model = ConcreteModel()
         model.x = Var()
         model.L = Param(initialize=0)
@@ -1456,37 +1796,44 @@ class MiscConTests(unittest.TestCase):
             expr = model.x <= model.z
             expr = expr >= model.y
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.z = Var()
         model.o = Constraint(rule=rule1)
-        #self.assertRaises(ValueError, model.create_instance)
+
+        # self.assertRaises(ValueError, model.create_instance)
         #
         def rule1(model):
             expr = model.x >= model.z
             expr = model.y >= expr
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.z = Var()
         model.o = Constraint(rule=rule1)
-        #self.assertRaises(ValueError, model.create_instance)
+
+        # self.assertRaises(ValueError, model.create_instance)
         #
         def rule1(model):
             expr = model.y <= model.x
             expr = model.y >= expr
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.o = Constraint(rule=rule1)
-        #self.assertRaises(ValueError, model.create_instance)
+
+        # self.assertRaises(ValueError, model.create_instance)
         #
         def rule1(model):
             expr = model.x >= model.L
             return expr
+
         model = ConcreteModel()
         model.x = Var()
         model.L = Param(initialize=0)
@@ -1496,6 +1843,7 @@ class MiscConTests(unittest.TestCase):
         def rule1(model):
             expr = model.U >= model.x
             return expr
+
         model = ConcreteModel()
         model.x = Var()
         model.U = Param(initialize=0)
@@ -1503,71 +1851,87 @@ class MiscConTests(unittest.TestCase):
 
         #
         def rule1(model):
-            expr=model.x
+            expr = model.x
             expr = expr == 0.0
             expr = expr <= 1.0
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.z = Var()
         model.o = Constraint(rule=rule1)
         self.assertRaises(TypeError, model.create_instance)
+
         #
         def rule1(model):
             expr = model.U <= model.x
             expr = expr <= model.L
             return expr
+
         model = ConcreteModel()
         model.x = Var()
         model.L = Param(initialize=0)
         model.U = Param(initialize=1)
-        model.o = Constraint(rule=rule1)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"The constraint expression resolved to a trivial Boolean \(False\)",
+        ):
+            model.o = Constraint(rule=rule1)
 
         #
         def rule1(model):
             expr = model.x >= model.z
             expr = expr <= model.y
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.z = Var()
         model.o = Constraint(rule=rule1)
-        #self.assertRaises(ValueError, model.create_instance)
+
+        # self.assertRaises(ValueError, model.create_instance)
         #
         def rule1(model):
             expr = model.x <= model.z
             expr = model.y <= expr
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.z = Var()
         model.o = Constraint(rule=rule1)
-        #self.assertRaises(ValueError, model.create_instance)
+
+        # self.assertRaises(ValueError, model.create_instance)
         #
         def rule1(model):
             expr = model.x <= model.L
             return expr
+
         model = ConcreteModel()
         model.x = Var()
         model.L = Param(initialize=0)
         model.o = Constraint(rule=rule1)
+
         #
         def rule1(model):
             expr = model.y >= model.x
             expr = model.y <= expr
             return expr
+
         model = AbstractModel()
         model.x = Var()
         model.y = Var()
         model.o = Constraint(rule=rule1)
-        #self.assertRaises(ValueError, model.create_instance)
+
+        # self.assertRaises(ValueError, model.create_instance)
         #
         def rule1(model):
             expr = model.U <= model.x
             return expr
+
         model = ConcreteModel()
         model.x = Var()
         model.U = Param(initialize=0)
@@ -1575,7 +1939,8 @@ class MiscConTests(unittest.TestCase):
 
         #
         def rule1(model):
-            return model.x+model.x
+            return model.x + model.x
+
         model = ConcreteModel()
         model.x = Var()
         try:
@@ -1611,10 +1976,12 @@ class MiscConTests(unittest.TestCase):
         self.assertIs(m.c.lower, m.l)
         self.assertIs(m.c.upper, m.u)
         with self.assertRaisesRegex(
-                ValueError, 'No value for uninitialized NumericValue object l'):
+            ValueError, 'No value for uninitialized ScalarExpression object l'
+        ):
             m.c.lb
         with self.assertRaisesRegex(
-                ValueError, 'No value for uninitialized NumericValue object u'):
+            ValueError, 'No value for uninitialized ScalarExpression object u'
+        ):
             m.c.ub
 
         m.l = 5
@@ -1626,27 +1993,47 @@ class MiscConTests(unittest.TestCase):
 
         m.l.expr = m.x
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' is a Ranged Inequality "
-                "with a variable lower bound"):
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
             m.c.lower
-        self.assertIs(m.c.upper, m.u)
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' is a Ranged Inequality "
-                "with a variable lower bound"):
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
+            self.assertIs(m.c.upper, m.u)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
             m.c.lb
-        self.assertEqual(m.c.ub, 10)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable lower bound",
+        ):
+            self.assertEqual(m.c.ub, 10)
 
         m.l = 15
         m.u.expr = m.x
-        self.assertIs(m.c.lower, m.l)
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' is a Ranged Inequality "
-                "with a variable upper bound"):
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
+            self.assertIs(m.c.lower, m.l)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
             m.c.upper
-        self.assertEqual(m.c.lb, 15)
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' is a Ranged Inequality "
-                "with a variable upper bound"):
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
+            self.assertEqual(m.c.lb, 15)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Constraint 'c' is a Ranged Inequality with a variable upper bound",
+        ):
             m.c.ub
 
         m.l = -float('inf')
@@ -1661,12 +2048,16 @@ class MiscConTests(unittest.TestCase):
         self.assertIs(m.c.lower, m.l)
         self.assertIs(m.c.upper, m.u)
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' created with an invalid "
-                r"non-finite lower bound \(inf\)"):
+            ValueError,
+            r"Constraint 'c' created with an invalid "
+            r"non-finite lower bound \(inf\)",
+        ):
             m.c.lb
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' created with an invalid "
-                r"non-finite upper bound \(-inf\)"):
+            ValueError,
+            r"Constraint 'c' created with an invalid "
+            r"non-finite upper bound \(-inf\)",
+        ):
             m.c.ub
 
         m.l = float('nan')
@@ -1674,12 +2065,16 @@ class MiscConTests(unittest.TestCase):
         self.assertIs(m.c.lower, m.l)
         self.assertIs(m.c.upper, m.u)
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' created with an invalid "
-                r"non-finite lower bound \(nan\)"):
+            ValueError,
+            r"Constraint 'c' created with an invalid "
+            r"non-finite lower bound \(nan\)",
+        ):
             m.c.lb
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' created with an invalid "
-                r"non-finite upper bound \(nan\)"):
+            ValueError,
+            r"Constraint 'c' created with an invalid "
+            r"non-finite upper bound \(nan\)",
+        ):
             m.c.ub
 
     def test_tuple_expression(self):
@@ -1694,20 +2089,23 @@ class MiscConTests(unittest.TestCase):
         self.assertIs(type(m.c.expr), EqualityExpression)
 
         with self.assertRaisesRegex(
-                ValueError, "Constraint 'c' does not have a proper value. "
-                "Equality Constraints expressed as 2-tuples cannot "
-                "contain None"):
+            ValueError,
+            "Cannot create EqualityExpression from argument types "
+            "'ScalarVar' and 'NoneType'",
+        ):
             m.c = (m.x, None)
 
+        # You can create it with an infinite value, but then one of the
+        # bounds will fail:
+        m.c = (m.x, float('inf'))
+        self.assertIsNone(m.c.ub)
         with self.assertRaisesRegex(
-                ValueError, r"Constraint 'c' created with an invalid "
-                r"non-finite lower bound \(inf\)"):
-            m.c = (m.x, float('inf'))
+            ValueError,
+            r"Constraint 'c' created with an invalid "
+            r"non-finite lower bound \(inf\)",
+        ):
+            m.c.lb
 
-        with self.assertRaisesRegex(
-                ValueError, r"Equality constraint 'c' defined with "
-                "non-finite term"):
-            m.c = EqualityExpression((m.x, None))
 
 if __name__ == "__main__":
     unittest.main()

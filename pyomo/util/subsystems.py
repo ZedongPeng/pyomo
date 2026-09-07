@@ -1,32 +1,47 @@
-#  ___________________________________________________________________________
+# ____________________________________________________________________________________
 #
-#  Pyomo: Python Optimization Modeling Objects
-#  Copyright 2017 National Technology and Engineering Solutions of Sandia, LLC
-#  Under the terms of Contract DE-NA0003525 with National Technology and
-#  Engineering Solutions of Sandia, LLC, the U.S. Government retains certain
-#  rights in this software.
-#  This software is distributed under the 3-clause BSD License.
-#  ___________________________________________________________________________
+# Pyomo: Python Optimization Modeling Objects
+# Copyright (c) 2008-2026 National Technology and Engineering Solutions of Sandia, LLC
+# Under the terms of Contract DE-NA0003525 with National Technology and Engineering
+# Solutions of Sandia, LLC, the U.S. Government retains certain rights in this
+# software.  This software is distributed under the 3-clause BSD License.
+# ____________________________________________________________________________________
 
 from pyomo.core.base.block import Block
 from pyomo.core.base.reference import Reference
 from pyomo.core.expr.visitor import identify_variables
 from pyomo.common.collections import ComponentSet, ComponentMap
 from pyomo.common.modeling import unique_component_name
-
+from pyomo.util.vars_from_expressions import get_vars_from_components
 from pyomo.core.base.constraint import Constraint
 from pyomo.core.base.expression import Expression
+from pyomo.core.base.objective import Objective
 from pyomo.core.base.external import ExternalFunction
 from pyomo.core.expr.visitor import StreamBasedExpressionVisitor
 from pyomo.core.expr.numeric_expr import ExternalFunctionExpression
-from pyomo.core.expr.numvalue import native_types
+from pyomo.core.expr.numvalue import native_types, NumericValue
 
 
 class _ExternalFunctionVisitor(StreamBasedExpressionVisitor):
+    def __init__(self, descend_into_named_expressions=True):
+        super().__init__()
+        self._descend_into_named_expressions = descend_into_named_expressions
+        self.named_expressions = []
 
     def initializeWalker(self, expr):
         self._functions = []
         self._seen = set()
+        return True, None
+
+    def beforeChild(self, parent, child, index):
+        if child.__class__ in native_types:
+            return False, None
+        elif (
+            not self._descend_into_named_expressions
+            and child.is_named_expression_type()
+        ):
+            self.named_expressions.append(child)
+            return False, None
         return True, None
 
     def exitNode(self, node, data):
@@ -38,17 +53,6 @@ class _ExternalFunctionVisitor(StreamBasedExpressionVisitor):
     def finalizeResult(self, result):
         return self._functions
 
-    def enterNode(self, node):
-        pass
-
-    def acceptChildResult(self, node, data, child_result, child_idx):
-        pass
-
-    def acceptChildResult(self, node, data, child_result, child_idx):
-        if child_result.__class__ in native_types:
-            return False, None
-        return child_result.is_expression_type(), None
-
 
 def identify_external_functions(expr):
     yield from _ExternalFunctionVisitor().walk_expression(expr)
@@ -56,10 +60,28 @@ def identify_external_functions(expr):
 
 def add_local_external_functions(block):
     ef_exprs = []
+    named_expressions = []
+    visitor = _ExternalFunctionVisitor(descend_into_named_expressions=False)
     for comp in block.component_data_objects(
-            (Constraint, Expression), active=True
-            ):
-        ef_exprs.extend(identify_external_functions(comp.expr))
+        (Constraint, Expression, Objective), active=True
+    ):
+        ef_exprs.extend(visitor.walk_expression(comp.expr))
+    named_expr_set = ComponentSet(visitor.named_expressions)
+    # List of unique named expressions
+    named_expressions = list(named_expr_set)
+    while named_expressions:
+        expr = named_expressions.pop()
+        # Clear named expression cache so we don't re-check named expressions
+        # we've seen before.
+        visitor.named_expressions.clear()
+        ef_exprs.extend(visitor.walk_expression(expr))
+        # Only add to the stack named expressions that we have
+        # not encountered yet.
+        for local_expr in visitor.named_expressions:
+            if local_expr not in named_expr_set:
+                named_expressions.append(local_expr)
+                named_expr_set.add(local_expr)
+
     unique_functions = []
     fcn_set = set()
     for expr in ef_exprs:
@@ -78,7 +100,7 @@ def add_local_external_functions(block):
 
 
 def create_subsystem_block(constraints, variables=None, include_fixed=False):
-    """ This function creates a block to serve as a subsystem with the
+    """This function creates a block to serve as a subsystem with the
     specified variables and constraints. To satisfy certain writers, other
     variables that appear in the constraints must be added to the block as
     well. We call these the "input vars." They may be thought of as
@@ -108,18 +130,16 @@ def create_subsystem_block(constraints, variables=None, include_fixed=False):
     block.cons = Reference(constraints)
     var_set = ComponentSet(variables)
     input_vars = []
-    for con in constraints:
-        for var in identify_variables(con.expr, include_fixed=include_fixed):
-            if var not in var_set:
-                input_vars.append(var)
-                var_set.add(var)
+    for var in get_vars_from_components(block, Constraint, include_fixed=include_fixed):
+        if var not in var_set:
+            input_vars.append(var)
     block.input_vars = Reference(input_vars)
     add_local_external_functions(block)
     return block
 
 
 def generate_subsystem_blocks(subsystems, include_fixed=False):
-    """ Generates blocks that contain subsystems of variables and constraints.
+    """Generates blocks that contain subsystems of variables and constraints.
 
     Arguments
     ---------
@@ -142,15 +162,22 @@ def generate_subsystem_blocks(subsystems, include_fixed=False):
         yield block, list(block.input_vars.values())
 
 
-class TemporarySubsystemManager(object):
-    """ This class is a context manager for cases when we want to
+class TemporarySubsystemManager:
+    """This class is a context manager for cases when we want to
     temporarily fix or deactivate certain variables or constraints
     in order to perform some solve or calculation with the resulting
     subsystem.
 
     """
 
-    def __init__(self, to_fix=None, to_deactivate=None, to_reset=None):
+    def __init__(
+        self,
+        to_fix=None,
+        to_deactivate=None,
+        to_reset=None,
+        to_unfix=None,
+        remove_bounds_on_fix=False,
+    ):
         """
         Arguments
         ---------
@@ -166,6 +193,12 @@ class TemporarySubsystemManager(object):
             List of var data objects that should be reset to their
             original values on exit from this object's context context
             manager.
+        to_unfix: List
+            List of var data objects to be temporarily unfixed. These are
+            restored to their original status on exit from this object's
+            context manager.
+        remove_bounds_on_fix: Bool
+            Whether bounds should be removed temporarily for fixed variables
 
         """
         if to_fix is None:
@@ -174,33 +207,65 @@ class TemporarySubsystemManager(object):
             to_deactivate = []
         if to_reset is None:
             to_reset = []
+        if to_unfix is None:
+            to_unfix = []
+        if not ComponentSet(to_fix).isdisjoint(ComponentSet(to_unfix)):
+            to_unfix_set = ComponentSet(to_unfix)
+            both = [var for var in to_fix if var in to_unfix_set]
+            var_names = "\n" + "\n".join([var.name for var in both])
+            raise RuntimeError(
+                f"Conflicting instructions: The following variables are present"
+                " in both to_fix and to_unfix lists: {var_names}"
+            )
         self._vars_to_fix = to_fix
         self._cons_to_deactivate = to_deactivate
         self._comps_to_set = to_reset
+        self._vars_to_unfix = to_unfix
         self._var_was_fixed = None
         self._con_was_active = None
         self._comp_original_value = None
+        self._var_was_unfixed = None
+        self._remove_bounds_on_fix = remove_bounds_on_fix
+        self._fixed_var_bounds = None
 
     def __enter__(self):
         to_fix = self._vars_to_fix
         to_deactivate = self._cons_to_deactivate
         to_set = self._comps_to_set
-        self._var_was_fixed = [(var, var.fixed) for var in to_fix]
+        to_unfix = self._vars_to_unfix
+        self._var_was_fixed = [(var, var.fixed) for var in to_fix + to_unfix]
         self._con_was_active = [(con, con.active) for con in to_deactivate]
         self._comp_original_value = [(comp, comp.value) for comp in to_set]
+        self._fixed_var_bounds = [(var.lb, var.ub) for var in to_fix]
 
         for var in self._vars_to_fix:
+            if self._remove_bounds_on_fix:
+                # TODO: Potentially override var.domain as well?
+                var.setlb(None)
+                var.setub(None)
             var.fix()
 
         for con in self._cons_to_deactivate:
             con.deactivate()
 
+        for var in self._vars_to_unfix:
+            # As of Pyomo 6.5, attempting to unfix an already unfixed var
+            # does not raise an exception. Here we rely on this behavior.
+            var.unfix()
+
         return self
 
     def __exit__(self, ex_type, ex_val, ex_bt):
         for var, was_fixed in self._var_was_fixed:
-            if not was_fixed:
+            if was_fixed:
+                var.fix()
+            else:
                 var.unfix()
+        if self._remove_bounds_on_fix:
+            for var, (lb, ub) in zip(self._vars_to_fix, self._fixed_var_bounds):
+                var.setlb(lb)
+                var.setub(ub)
+
         for con, was_active in self._con_was_active:
             if was_active:
                 con.activate()
@@ -209,7 +274,7 @@ class TemporarySubsystemManager(object):
 
 
 class ParamSweeper(TemporarySubsystemManager):
-    """ This class enables setting values of variables/parameters
+    """This class enables setting values of variables/parameters
     according to a provided sequence. Iterating over this object
     sets values to the next in the sequence, at which point a
     calculation may be performed and output values compared.
@@ -219,37 +284,45 @@ class ParamSweeper(TemporarySubsystemManager):
     calculation, over a range of values for which the calculation
     is valid. For example:
 
-    >>> model = ... # Make model somehow
-    >>> solver = ... # Make solver somehow
-    >>> input_vars = [model.v1]
-    >>> n_scen = 2
-    >>> input_values = ComponentMap([(model.v1, [1.1, 2.1])])
-    >>> output_values = ComponentMap([(model.v2, [1.2, 2.2])])
-    >>> with ParamSweeper(
-    ...         n_scen,
-    ...         input_values,
-    ...         output_values,
-    ...         to_fix=input_vars,
-    ...         ) as param_sweeper:
-    >>>     for inputs, outputs in param_sweeper:
-    >>>         solver.solve(model)
-    >>>         # inputs and outputs contain the correct values for this
-    >>>         # instance of the model
-    >>>         for var, val in outputs.items():
-    >>>             # Test that model.v2 was calculated properly.
-    >>>             # First that it equals 1.2, then that it equals 2.2
-    >>>             assert var.value == val
+    .. testcode::
+       :skipif: not glpk_available
+
+       model = pyo.ConcreteModel()
+       model.v1 = pyo.Var()
+       model.v2 = pyo.Var()
+       model.c = pyo.Constraint(expr=model.v2 - model.v1 >= 0.1)
+       model.o = pyo.Objective(expr=model.v1 + model.v2)
+       solver = pyo.SolverFactory('glpk')
+       input_vars = [model.v1]
+       n_scen = 2
+       input_values = pyo.ComponentMap([(model.v1, [1.1, 2.1])])
+       output_values = pyo.ComponentMap([(model.v2, [1.2, 2.2])])
+       with ParamSweeper(
+               n_scen,
+               input_values,
+               output_values,
+               to_fix=input_vars,
+               ) as param_sweeper:
+           for inputs, outputs in param_sweeper:
+               solver.solve(model)
+               # inputs and outputs contain the correct values for this
+               # instance of the model
+               for var, val in outputs.items():
+                   # Test that model.v2 was calculated properly.
+                   # First that it equals 1.2, then that it equals 2.2
+                   assert var.value == val, f"{var.value} != {val}"
 
     """
 
-    def __init__(self,
-            n_scenario,
-            input_values,
-            output_values=None,
-            to_fix=None,
-            to_deactivate=None,
-            to_reset=None,
-            ):
+    def __init__(
+        self,
+        n_scenario,
+        input_values,
+        output_values=None,
+        to_fix=None,
+        to_deactivate=None,
+        to_reset=None,
+    ):
         """
         Parameters
         ----------
@@ -275,7 +348,7 @@ class ParamSweeper(TemporarySubsystemManager):
         self.output_values = output
         self.n_scenario = n_scenario
         self.initial_state_values = None
-        self._ip = -1 # Index pointer for iteration
+        self._ip = -1  # Index pointer for iteration
 
         if to_reset is None:
             # Input values will be set repeatedly by iterating over this
@@ -289,10 +362,8 @@ class ParamSweeper(TemporarySubsystemManager):
             to_reset.extend(var for var in output)
 
         super(ParamSweeper, self).__init__(
-                to_fix=to_fix,
-                to_deactivate=to_deactivate,
-                to_reset=to_reset,
-                )
+            to_fix=to_fix, to_deactivate=to_deactivate, to_reset=to_reset
+        )
 
     def __iter__(self):
         return self
@@ -316,8 +387,8 @@ class ParamSweeper(TemporarySubsystemManager):
                 var.set_value(val)
                 inputs[var] = val
 
-            outputs = ComponentMap([
-                (var, values[i]) for var, values in output_values.items()
-                ])
+            outputs = ComponentMap(
+                [(var, values[i]) for var, values in output_values.items()]
+            )
 
             return inputs, outputs
