@@ -143,9 +143,6 @@ class _MindtPyAlgorithm:
         self.best_solution_found = None
         self.best_solution_found_time = None
 
-        self.stored_bound = {}
-        self.num_no_good_cuts_added = {}
-        self.last_iter_cuts = False
         # Store the OA cuts generated in the mip_start_process.
         self.mip_start_lazy_oa_cuts = []
         # Whether to load solutions in solve() function
@@ -800,6 +797,20 @@ class _MindtPyAlgorithm:
         """
         if math.isnan(bound_value):
             return
+        # The no-good cuts (or tabu list) only exclude the integer combinations that
+        # have already been explored, i.e., whose fixed NLP subproblems have been
+        # solved to (global) optimality or shown to be infeasible. Therefore, although
+        # the main problem with no-good cuts is no longer a relaxation of the original
+        # MINLP, its optimal objective value remains a valid dual bound for all the
+        # unexplored integer combinations, while the incumbent (primal bound) is the
+        # exact optimum over the explored ones. Hence, in each iteration, a valid dual
+        # bound for the original problem is the worse of the primal bound and the bound
+        # obtained from the main problem with the no-good cuts.
+        if self.config.add_no_good_cuts or self.config.use_tabu_list:
+            if self.objective_sense == minimize:
+                bound_value = min(self.primal_bound, bound_value)
+            else:
+                bound_value = max(self.primal_bound, bound_value)
         if self.objective_sense == minimize:
             self.dual_bound = max(bound_value, self.dual_bound)
             self.dual_bound_improved = self.dual_bound > self.dual_bound_progress[-1]
@@ -1781,82 +1792,6 @@ class _MindtPyAlgorithm:
             or (check_cycling and self.iteration_cycling())
         )
 
-    def fix_dual_bound(self, last_iter_cuts):
-        """Fix the dual bound when no-good cuts or tabu list is activated.
-
-        Parameters
-        ----------
-        last_iter_cuts : bool
-            Whether the cuts in the last iteration have been added.
-        """
-        # If no-good cuts or tabu list is activated, the dual bound is not valid for the final optimal solution.
-        # Therefore, we need to correct it at the end.
-        # In singletree implementation, the dual bound at one iteration before the optimal solution, is valid for the optimal solution.
-        # So we will set the dual bound to it.
-        config = self.config
-        if config.single_tree:
-            config.logger.info(
-                'Fix the bound to the value of one iteration before optimal solution is found.'
-            )
-            try:
-                self.dual_bound = self.stored_bound[self.primal_bound]
-            except KeyError as e:
-                config.logger.error(e, exc_info=True)
-                config.logger.error('No stored bound found. Bound fix failed.')
-        else:
-            config.logger.info(
-                'Solve the main problem without the last no_good cut to fix the bound.'
-                'zero_tolerance is set to 1E-4'
-            )
-            config.zero_tolerance = 1e-4
-            # Solve NLP subproblem
-            # The constraint linearization happens in the handlers
-            if not last_iter_cuts:
-                fixed_nlp, fixed_nlp_result = self.solve_subproblem()
-                self.handle_nlp_subproblem_tc(fixed_nlp, fixed_nlp_result)
-
-            MindtPy = self.mip.MindtPy_utils
-            # Deactivate the integer cuts generated after the best solution was found.
-            self.deactivate_no_good_cuts_when_fixing_bound(MindtPy.cuts.no_good_cuts)
-            if (
-                config.add_regularization is not None
-                and MindtPy.component('mip_obj') is None
-            ):
-                MindtPy.objective_list[-1].activate()
-            # determine if persistent solver is called.
-            if isinstance(self.mip_opt, PersistentSolver):
-                self.mip_opt.set_instance(self.mip, symbolic_solver_labels=True)
-            mip_args = dict(config.mip_solver_args)
-            update_solver_timelimit(
-                self.mip_opt, config.mip_solver, self.timing, config
-            )
-            main_mip_results = self.mip_opt.solve(
-                self.mip,
-                tee=config.mip_solver_tee,
-                load_solutions=self.mip_load_solutions,
-                **mip_args,
-            )
-            if len(main_mip_results.solution) > 0:
-                self.mip.solutions.load_from(main_mip_results)
-
-            if main_mip_results.solver.termination_condition is tc.infeasible:
-                config.logger.info(
-                    'Bound fix failed. The bound fix problem is infeasible'
-                )
-            else:
-                self.update_suboptimal_dual_bound(main_mip_results)
-                config.logger.info(
-                    'Fixed bound values: Primal Bound: {}  Dual Bound: {}'.format(
-                        self.primal_bound, self.dual_bound
-                    )
-                )
-            # Check bound convergence
-            if (
-                abs(self.primal_bound - self.dual_bound)
-                <= config.absolute_bound_tolerance
-            ):
-                self.results.solver.termination_condition = tc.optimal
-
     def set_up_tabulist_callback(self):
         """Sets up the tabulist using IncumbentCallback.
         Currently only support CPLEX.
@@ -1952,7 +1887,9 @@ class _MindtPyAlgorithm:
                 self.mip_opt._pyomo_var_to_solver_var_map
             )
         if main_mip_results.solver.termination_condition is tc.optimal:
-            if config.single_tree and not config.add_no_good_cuts:
+            if config.single_tree:
+                # With no-good cuts or tabu list, the bound of the B&B tree is
+                # clamped to the primal bound in update_dual_bound.
                 self.update_suboptimal_dual_bound(main_mip_results)
         elif main_mip_results.solver.termination_condition is tc.infeasibleOrUnbounded:
             # Linear solvers will sometimes tell me that it's infeasible or
@@ -3131,7 +3068,6 @@ class _MindtPyAlgorithm:
                     self.handle_main_optimal(main_mip)
                 elif main_mip_results.solver.termination_condition is tc.infeasible:
                     self.handle_main_infeasible()
-                    self.last_iter_cuts = True
                     should_terminate = True
                 elif main_mip_results.solver.termination_condition is tc.unbounded:
                     temp_results = self.handle_main_unbounded(main_mip)
@@ -3236,7 +3172,6 @@ class _MindtPyAlgorithm:
                         self.handle_nlp_subproblem_tc(fixed_nlp, fixed_nlp_result)
 
             if self.algorithm_should_terminate(check_cycling=True):
-                self.last_iter_cuts = False
                 break
 
             if not config.single_tree:  # if we don't use lazy callback, i.e. LP_NLP
@@ -3255,7 +3190,6 @@ class _MindtPyAlgorithm:
                         config.call_after_subproblem_solve(fixed_nlp)
 
                     if self.algorithm_should_terminate(check_cycling=False):
-                        self.last_iter_cuts = True
                         break
                 else:
                     solution_name_obj = self.get_solution_name_obj(main_mip_results)
@@ -3292,19 +3226,8 @@ class _MindtPyAlgorithm:
                             config.call_after_subproblem_solve(fixed_nlp)
 
                         if self.algorithm_should_terminate(check_cycling=False):
-                            self.last_iter_cuts = True
                             break  # TODO: break two loops.
 
-        # if add_no_good_cuts is True, the bound obtained in the last iteration is no reliable.
-        # we correct it after the iteration.
-        # There is no need to fix the dual bound if no feasible solution has been found.
-        if (
-            (config.add_no_good_cuts or config.use_tabu_list)
-            and not self.should_terminate
-            and config.add_regularization is None
-            and self.best_solution_found is not None
-        ):
-            self.fix_dual_bound(self.last_iter_cuts)
         config.logger.info(
             ' ==============================================================================================='
         )
