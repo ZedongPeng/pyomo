@@ -105,6 +105,7 @@ class _MindtPyAlgorithm:
         self.curr_int_sol = []
         self.should_terminate = False
         self.integer_list = []
+        self._integer_exclusion_bound_valid = True
         # Dictionary {integer solution (tuple): [cuts begin index, cuts end index] (list)}
         self.integer_solution_to_cuts_index = dict()
 
@@ -797,16 +798,16 @@ class _MindtPyAlgorithm:
         """
         if math.isnan(bound_value):
             return
-        # The no-good cuts (or tabu list) only exclude the integer combinations that
-        # have already been explored, i.e., whose fixed NLP subproblems have been
-        # solved to (global) optimality or shown to be infeasible. Therefore, although
-        # the main problem with no-good cuts is no longer a relaxation of the original
-        # MINLP, its optimal objective value remains a valid dual bound for all the
-        # unexplored integer combinations, while the incumbent (primal bound) is the
-        # exact optimum over the explored ones. Hence, in each iteration, a valid dual
-        # bound for the original problem is the worse of the primal bound and the bound
-        # obtained from the main problem with the no-good cuts.
+        # Under the algorithm's assumptions (convexity for OA, globally solved
+        # subproblems for GOA), the incumbent bounds the optimum over excluded
+        # assignments only if their NLPs were solved to optimality or infeasibility.
+        # The main problem bounds the remaining assignments, so combine its bound
+        # with the incumbent. If an excluded NLP was unresolved, retain the last
+        # bound obtained before that exclusion instead.
         if self.config.add_no_good_cuts or self.config.use_tabu_list:
+            if not self._integer_exclusion_bound_valid:
+                self.dual_bound_improved = False
+                return
             if self.objective_sense == minimize:
                 bound_value = min(self.primal_bound, bound_value)
             else:
@@ -995,6 +996,7 @@ class _MindtPyAlgorithm:
             The original model to be solved in MindtPy.
         """
         config = self.config
+        self._integer_exclusion_bound_valid = True
         self.original_model = model
         obj, objective_count, dummy_name = self._get_main_objective(
             model, logger=config.logger
@@ -1385,6 +1387,22 @@ class _MindtPyAlgorithm:
         TransformationFactory('contrib.deactivate_trivial_constraints').revert(
             self.fixed_nlp
         )
+        # Both the ordinary loop and the single-tree callbacks solve fixed NLPs
+        # here. Record unresolved subproblems before either can exclude an integer
+        # assignment with a no-good cut or the tabu list. Local optimality suffices
+        # for the convex algorithms, but not for GOA.
+        if config.add_no_good_cuts or config.use_tabu_list:
+            termination = results.solver.termination_condition
+            if termination not in {tc.optimal, tc.infeasible} and not (
+                termination is tc.locallyOptimal and config.strategy != 'GOA'
+            ):
+                if self._integer_exclusion_bound_valid:
+                    config.logger.info(
+                        'Fixed NLP subproblem terminated with %s. Retaining the '
+                        'last dual bound before excluding unresolved assignments.',
+                        termination,
+                    )
+                self._integer_exclusion_bound_valid = False
         return self.fixed_nlp, results
 
     def handle_nlp_subproblem_tc(self, fixed_nlp, result, cb_opt=None):
@@ -2084,19 +2102,33 @@ class _MindtPyAlgorithm:
             self.config.logger.warning(
                 'MindtPy initialization may have generated poor quality cuts.'
             )
-        # TODO no-good cuts for single tree case
-        # set optimistic bound to infinity
         self.config.logger.info(
             'MindtPy exiting due to MILP main problem infeasibility.'
         )
         if self.results.solver.termination_condition is None:
+            has_integer_exclusions = (
+                self.config.add_no_good_cuts or self.config.use_tabu_list
+            )
+            if (
+                has_integer_exclusions
+                and self._integer_exclusion_bound_valid
+                and math.isfinite(self.primal_bound)
+            ):
+                # The remaining assignments are infeasible. The incumbent is
+                # therefore optimal over all assignments, including the excluded
+                # ones, without another main problem solve.
+                self.update_dual_bound(self.primal_bound)
+                if self.bounds_converged():
+                    return
             if (
                 self.primal_bound == float('inf') and self.objective_sense == minimize
             ) or (
                 self.primal_bound == float('-inf') and self.objective_sense == maximize
             ):
-                # if self.mip_iter == 0:
-                self.results.solver.termination_condition = tc.infeasible
+                if has_integer_exclusions and not self._integer_exclusion_bound_valid:
+                    self.results.solver.termination_condition = tc.noSolution
+                else:
+                    self.results.solver.termination_condition = tc.infeasible
             else:
                 self.results.solver.termination_condition = tc.feasible
 
@@ -3063,12 +3095,12 @@ class _MindtPyAlgorithm:
     def handle_main_mip_termination(self, main_mip, main_mip_results):
         should_terminate = False
         if main_mip_results is not None:
-            if not self.config.single_tree:
+            if main_mip_results.solver.termination_condition is tc.infeasible:
+                self.handle_main_infeasible()
+                should_terminate = True
+            elif not self.config.single_tree:
                 if main_mip_results.solver.termination_condition is tc.optimal:
                     self.handle_main_optimal(main_mip)
-                elif main_mip_results.solver.termination_condition is tc.infeasible:
-                    self.handle_main_infeasible()
-                    should_terminate = True
                 elif main_mip_results.solver.termination_condition is tc.unbounded:
                     temp_results = self.handle_main_unbounded(main_mip)
                 elif (
